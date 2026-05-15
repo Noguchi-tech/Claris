@@ -34,6 +34,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
   color: var(--ink);
   background: transparent;
+  overflow-x: hidden;
 }
 
 button,
@@ -453,6 +454,8 @@ input,
 textarea,
 select {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
@@ -469,8 +472,10 @@ textarea {
 }
 
 .sheet-dialog {
-  width: min(calc(100% - 22px), 720px);
+  width: min(calc(100dvw - 22px), 720px);
+  max-width: calc(100dvw - 22px);
   max-height: calc(100dvh - 28px);
+  margin: auto;
   border: 0;
   border-radius: 8px;
   padding: 0;
@@ -485,7 +490,8 @@ textarea {
 
 .sheet {
   max-height: calc(100dvh - 28px);
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -499,6 +505,13 @@ textarea {
   align-items: flex-start;
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.sheet-header > div,
+.form-grid,
+.field,
+.field-inline {
+  min-width: 0;
 }
 
 .sheet-title {

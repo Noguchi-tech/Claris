@@ -399,9 +399,9 @@
     const count = (priority) => actionTasks.filter((task) => task.priority === priority).length;
     return `
       <span class="day-priority-row" aria-label="作業優先度">
-        <span>最${count("P1") ? "●" : "・"}</span>
-        <span>2${count("P2") ? "●" : "・"}</span>
-        <span>3${count("P3") ? "●" : "・"}</span>
+        <span>最${count("P1") ? "●" : "-"}</span>
+        <span>2${count("P2") ? "●" : "-"}</span>
+        <span>3${count("P3") ? "●" : "-"}</span>
         ${count("SUB") ? `<span>サ${count("SUB")}</span>` : ""}
       </span>
     `;
