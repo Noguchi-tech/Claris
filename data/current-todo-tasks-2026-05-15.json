@@ -1,0 +1,465 @@
+{
+  "importId": "current-todo-export-2026-05-15T22-40-49-replace-tasks",
+  "sourceFile": "現在のTodoのタスクをエクスポートしてみました。.txt",
+  "importedFrom": "C:/Users/noguc/Documents/Codex/Claris_app/現在のTodoのタスクをエクスポートしてみました。.txt",
+  "generatedAt": "2026-05-15T15:21:07.673Z",
+  "note": "Microsoft To Do export dates in parentheses are mapped to Claris actionDate. Explicit DL tokens in titles are kept as dueDate.",
+  "tasks": [
+    {
+      "title": "【四半期】キーボックス番号変更",
+      "description": "",
+      "actionDate": "2026-07-01",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【四半期】金庫暗証番号変更",
+      "description": "",
+      "actionDate": "2026-07-01",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【四半期】防犯カメラ　時刻設定ずれてないか確認",
+      "description": "",
+      "actionDate": "2026-07-01",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【月次】館　来月予算を送る　毎月21日",
+      "description": "",
+      "actionDate": "2026-06-18",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "予算組入力　毎月15日〆",
+      "description": "",
+      "actionDate": "2026-06-12",
+      "dueDate": "",
+      "priority": "P1",
+      "status": "active"
+    },
+    {
+      "title": "【月次】勤怠送信",
+      "description": "",
+      "actionDate": "2026-06-01",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "実施　閉店後ストック画像投稿",
+      "description": "",
+      "actionDate": "2026-05-31",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【四半期次】SharePoint登録",
+      "description": "",
+      "actionDate": "2026-05-31",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【月次】月末に、館の出退勤の青ファイル",
+      "description": "ファイルの「テナント責任者」に店長名を代筆\n写真のロッカーの場所に入れる",
+      "actionDate": "2026-05-31",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "イーゼル差し替え　感謝デー　29夜差し替え→30夜撤去",
+      "description": "",
+      "actionDate": "2026-05-29",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "毎月25日　商売計画記入〆日",
+      "description": "",
+      "actionDate": "2026-05-24",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【週次】個店　未意思入れ修正",
+      "description": "",
+      "actionDate": "2026-05-21",
+      "dueDate": "",
+      "priority": "P2",
+      "status": "active"
+    },
+    {
+      "title": "イーゼル差し替え　感謝デー　19夜差し替え→20夜撤去",
+      "description": "",
+      "actionDate": "2026-05-19",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【週次】5週報",
+      "description": "昨対\n昨対既存差\n前週比\n前週比既存差\n構成比\n在庫を同じように。",
+      "actionDate": "2026-05-18",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【週次】店別単品ランキング（週次/JAN）",
+      "description": "数量　トップ70かつ手持ち2週以下で十分。\n⓪【ダウンロード】初期表示\n①V列100以上,X列4週以上の商品を下げる\n②Y列100, Z列0の欠品率高い商品を上げる\n③X列手持ち4週以下",
+      "actionDate": "2026-05-18",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "iDアプリ　登録とPCへの取り込みを処理",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "P2",
+      "status": "active"
+    },
+    {
+      "title": "【月次】シフト作成③",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "P2",
+      "status": "active"
+    },
+    {
+      "title": "【週次】本部会議　議事録確認　→ファイルを保存",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【週次】MUJI POS週次点検シート",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "店長会欠席　理由書記入",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "P1",
+      "status": "active"
+    },
+    {
+      "title": "電子マニフェスト対応",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "P3",
+      "status": "active"
+    },
+    {
+      "title": "【月次】シフト作成②",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "P2",
+      "status": "active"
+    },
+    {
+      "title": "間瀬さん　通勤手当申請の差し戻し処理",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "2026-05-17",
+      "priority": "P1",
+      "status": "active"
+    },
+    {
+      "title": "人時売上高　10,783、18100円",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "固定資産棚卸　0512-0520中に",
+      "description": "",
+      "actionDate": "2026-05-17",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【月次】シフト作成①",
+      "description": "",
+      "actionDate": "2026-05-16",
+      "dueDate": "",
+      "priority": "P2",
+      "status": "active"
+    },
+    {
+      "title": "【週次】監査、その他週次資料振り出し",
+      "description": "",
+      "actionDate": "2026-05-16",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "【週次】売筋操作シート　→5月15日(金)に延期",
+      "description": "",
+      "actionDate": "2026-05-15",
+      "dueDate": "",
+      "priority": "P2",
+      "status": "active"
+    },
+    {
+      "title": "PL出る　→ 月次カルテ作成",
+      "description": "",
+      "actionDate": "2026-05-13",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "クレジット取引不備クレAオフライン処理",
+      "description": "",
+      "actionDate": "2026-05-11",
+      "dueDate": "2026-05-21",
+      "priority": "SUB",
+      "status": "active"
+    },
+    {
+      "title": "加藤さん　備品",
+      "description": "スパイラル延長コード　1本\nコード隠し　1本1200mm以上2000mmあると嬉しい\nブックスタンド　2個",
+      "actionDate": "2026-05-10",
+      "dueDate": "",
+      "priority": "SUB",
+      "status": "active"
+    },
+    {
+      "title": "【月次・最初の土曜日】4種の神器　自店商売計画、サポートツール対応",
+      "description": "",
+      "actionDate": "2026-05-10",
+      "dueDate": "",
+      "priority": "P3",
+      "status": "active"
+    },
+    {
+      "title": "追加定点の配置検討",
+      "description": "",
+      "actionDate": "2026-05-02",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "店舗内チーム決め",
+      "description": "",
+      "actionDate": "2026-05-02",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "日次項目修正",
+      "description": "",
+      "actionDate": "2026-05-01",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "ヤマト　未収計算書の紛失の対応",
+      "description": "",
+      "actionDate": "2026-01-29",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "人件費研修　動画みたい",
+      "description": "",
+      "actionDate": "2026-01-28",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "アートセッティングデリバリー　動画みたい",
+      "description": "",
+      "actionDate": "2026-01-28",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "シフト　6/5南川さんか加藤さんを出勤させて、賞味の説明会出てもらう",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "スリッパ　試し履き用のマット",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "SUB",
+      "status": "active"
+    },
+    {
+      "title": "お試し会　導線上でビラ配り。",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "エンドの使い方　新規など「季節性があるもの」「フェイスと違うけど売れてるもの」を抜き出して販売",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "倉庫の在庫　「減らしていく」→「減った実感」へ",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "備品　L管設置場所",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "SUB",
+      "status": "active"
+    },
+    {
+      "title": "店舗のやること",
+      "description": "6月から　子供縮小→トラベル移動→婦人移動\nシングルハンガー　幅1200×6本",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "日次　TA前の床は綺麗か",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "日次　清掃　テスターを置いているトレーは汚れていない",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "日次　マネキンからタグが出ていない",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "日次　施策対象商品に施策POPが付いている",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "備品発注",
+      "description": "1000mmPOSレール　10本\n両面ダブルフック　50本\n片面POPフック　20本\n仕切り板400 100枚",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "掃除　あるべき状態の周知、時間の工面",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "新人スタッフ　育成進捗管理",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "桑名の閉店チェックリスト　見せてもらうのもあり。",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "在庫金額　週次KPI   →月次5週報（桑名も参考に）",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "店型登録　売れるかどうかで。ステーとファブは削除で良い。　6月から",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "業務連絡　勘定　人件費出てくるので月次予算確認可能",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    },
+    {
+      "title": "要員シミュレーション　再計算して人時が不足再計算　事実どこまで採用できるのか？",
+      "description": "",
+      "actionDate": "",
+      "dueDate": "",
+      "priority": "NONE",
+      "status": "active"
+    }
+  ]
+}

@@ -5,6 +5,7 @@
   const DB_VERSION = 1;
   const STORE = "app";
   const STATE_KEY = "state";
+  const BUNDLED_TASK_IMPORT_URL = "./data/current-todo-tasks-2026-05-15.json";
   const SINGLE_SLOT_PRIORITIES = ["P1", "P2", "P3"];
 
   const priorityMeta = {
@@ -60,6 +61,7 @@
     bindEvents();
     app.db = await openDatabase();
     app.state = await loadState();
+    await applyBundledTaskImport();
     render();
     registerServiceWorker();
   }
@@ -119,7 +121,8 @@
       settings: {
         workerName: "",
         showCompleted: true,
-        showLinkedMemos: true
+        showLinkedMemos: true,
+        appliedTaskImportId: ""
       },
       ui: {
         activeTab: "today",
@@ -1454,6 +1457,25 @@
     showToast(`${result.tasks}件のタスク、${result.memos}件のメモを取り込みました。`);
   }
 
+  async function applyBundledTaskImport() {
+    try {
+      const response = await fetch(BUNDLED_TASK_IMPORT_URL, { cache: "no-store" });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const importId = String(payload.importId || "");
+      if (!importId || app.state.settings.appliedTaskImportId === importId) return;
+
+      const imported = importJson(JSON.stringify(payload));
+      if (!imported.tasks.length) return;
+      replaceTasksFromImport(imported.tasks, importId);
+      app.state.settings.appliedTaskImportId = importId;
+      await saveState();
+      showToast(`${imported.tasks.length}件のタスクを指定ファイルで上書きしました。`);
+    } catch {
+      // 同梱インポートは初期投入用。失敗しても通常利用は止めない。
+    }
+  }
+
   async function importText(raw) {
     const text = raw.trim();
     if (!text) return { tasks: 0, memos: 0 };
@@ -1467,11 +1489,39 @@
       return { tasks: 0, memos: 0 };
     }
     const now = nowIso();
-    imported.tasks.forEach((task) => app.state.tasks.push(normalizeTask({ ...task, id: uid("task"), createdAt: now, updatedAt: now })));
+    app.state.tasks.push(...normalizeImportedTasks(imported.tasks, now));
     imported.memos.forEach((memo) => app.state.memos.push(normalizeMemo({ ...memo, id: uid("memo"), createdAt: now, updatedAt: now })));
     imported.policies.forEach((policy) => app.state.policies.push({ ...policy, id: uid("policy"), createdAt: now, updatedAt: now }));
     await saveState();
     return { tasks: imported.tasks.length, memos: imported.memos.length };
+  }
+
+  function replaceTasksFromImport(tasks, importId) {
+    const now = nowIso();
+    app.state.lastTaskImportBackup = {
+      importId,
+      createdAt: now,
+      tasks: app.state.tasks,
+      memoTaskIds: app.state.memos
+        .filter((memo) => memo.taskIds?.length)
+        .map((memo) => ({ memoId: memo.id, taskIds: [...memo.taskIds] }))
+    };
+    app.state.tasks = normalizeImportedTasks(tasks, now);
+    app.state.memos.forEach((memo) => {
+      if (!memo.taskIds?.length) return;
+      memo.taskIds = [];
+      memo.updatedAt = now;
+    });
+  }
+
+  function normalizeImportedTasks(tasks, now) {
+    return tasks.map((task) => normalizeTask({
+      ...task,
+      id: uid("task"),
+      status: task.status || "active",
+      createdAt: now,
+      updatedAt: now
+    }));
   }
 
   function importJson(text) {
@@ -1539,7 +1589,7 @@
 
   function parseTodoLine(rawTitle) {
     let title = rawTitle.replace(/\s*★\s*$/g, "").trim();
-    const finalDate = title.match(/[（(]([^（）()]+)[）)]\s*$/);
+    const finalDate = title.match(/\s*[（(]((?:今日|明日|昨日)|\d{1,2}月\d{1,2}日?)(?:[（(][^）)]*[）)])?[）)]\s*$/u);
     let actionDate = "";
     if (finalDate) {
       actionDate = parseJapaneseDate(finalDate[1]);
