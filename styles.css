@@ -441,7 +441,7 @@ input[type="checkbox"] {
 }
 
 .field-inline {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 1fr;
 }
 
 label {
@@ -628,6 +628,10 @@ textarea {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
 .audio-list {

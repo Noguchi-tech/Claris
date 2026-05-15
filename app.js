@@ -46,6 +46,10 @@
     recordingBaseText: "",
     recordingTranscript: "",
     recordingStream: null,
+    pendingRecordings: [],
+    pendingRecordingTranscript: "",
+    recordingStopPromise: null,
+    recordingStopResolve: null,
     recognition: null,
     toastTimer: 0
   };
@@ -482,6 +486,7 @@
         </div>
       </section>
     `;
+    updateTranscriptPreview(getRecordingPreviewText());
     updateRecordingButtons();
   }
 
@@ -574,6 +579,7 @@
     const project = findById(app.state.projects, memo.projectId);
     const linkedTasks = memo.taskIds.map((id) => findById(app.state.tasks, id)).filter(Boolean);
     const recordings = memo.recordings || [];
+    const previewText = getMemoPreviewText(memo);
     return `
       <article class="memo-card">
         <div class="section-head">
@@ -587,16 +593,7 @@
           ${linkedTasks.length ? `<span class="tag">関連タスク ${linkedTasks.length}</span>` : ""}
           ${recordings.length ? `<span class="tag">録音 ${recordings.length}</span>` : ""}
         </div>
-        ${memo.body ? `<p class="body-preview">${escapeHtml(truncate(memo.body, 180))}</p>` : ""}
-        ${memo.transcript ? `<div class="memo-summary"><strong>文字起こし</strong> ${escapeHtml(truncate(memo.transcript, 220))}</div>` : ""}
-        ${memo.agenda || memo.decisions || memo.nextActions ? `
-          <div class="memo-summary">
-            ${memo.agenda ? `<strong>議題</strong> ${escapeHtml(memo.agenda)}<br>` : ""}
-            ${memo.decisions ? `<strong>決定</strong> ${escapeHtml(memo.decisions)}<br>` : ""}
-            ${memo.nextActions ? `<strong>次</strong> ${escapeHtml(memo.nextActions)}` : ""}
-          </div>
-        ` : ""}
-        ${recordings.length ? `<div class="audio-list">${recordings.map(renderRecording).join("")}</div>` : ""}
+        ${previewText ? `<p class="body-preview">${escapeHtml(previewText)}</p>` : ""}
         <div class="card-actions">
           <button class="mini-button" type="button" data-action="memo-to-task" data-id="${escapeAttr(memo.id)}">タスク化</button>
           <button class="mini-button" type="button" data-action="delete-memo" data-id="${escapeAttr(memo.id)}">削除</button>
@@ -855,6 +852,12 @@
             <label for="memoTranscript">文字起こし</label>
             <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(existing?.transcript || "")}</textarea>
           </div>
+          ${existing?.recordings?.length ? `
+            <div class="field">
+              <label>録音</label>
+              <div class="audio-list">${existing.recordings.map(renderRecording).join("")}</div>
+            </div>
+          ` : ""}
           <div class="field-inline">
             <div class="field">
               <label for="memoDueDate">DL</label>
@@ -1427,21 +1430,29 @@
   }
 
   async function saveQuickMemo() {
+    await ensureRecordingStopped();
     const textarea = document.getElementById("quickMemoText");
     const body = textarea?.value.trim() || "";
-    if (!body) {
-      showToast("本文を入力してください。");
+    const transcript = app.pendingRecordingTranscript.trim();
+    const recordings = [...app.pendingRecordings];
+    if (!body && !transcript && !recordings.length) {
+      showToast("本文または録音を入力してください。");
       return;
     }
     const now = nowIso();
     app.state.memos.unshift(normalizeMemo({
       id: uid("memo"),
-      title: firstLine(body) || "走り書きメモ",
+      title: firstLine(body) || firstLine(transcript) || "録音メモ",
       body,
+      transcript,
+      recordings,
       createdAt: now,
       updatedAt: now
     }));
     textarea.value = "";
+    app.pendingRecordings = [];
+    app.pendingRecordingTranscript = "";
+    updateTranscriptPreview("");
     await saveState();
     render();
     showToast("走り書きメモを保存しました。");
@@ -1460,11 +1471,14 @@
       const textarea = document.getElementById("quickMemoText");
       app.recordingBaseText = textarea?.value.trim() || "";
       app.recordingTranscript = "";
-      updateTranscriptPreview("");
+      updateTranscriptPreview(getRecordingPreviewText());
       app.mediaRecorder.addEventListener("dataavailable", (event) => {
         if (event.data.size) app.recordingChunks.push(event.data);
       });
-      app.mediaRecorder.addEventListener("stop", saveRecordingMemo);
+      app.recordingStopPromise = new Promise((resolve) => {
+        app.recordingStopResolve = resolve;
+      });
+      app.mediaRecorder.addEventListener("stop", finalizeStoppedRecording);
       app.mediaRecorder.start();
       const transcriptionStarted = startTranscription({ recording: true });
       updateRecordingButtons(transcriptionStarted ? "録音中 / 文字起こし中" : "録音中（文字起こし非対応）");
@@ -1473,48 +1487,60 @@
     }
   }
 
-  function stopRecording() {
-    stopTranscription();
+  async function stopRecording() {
+    stopTranscription({ abort: true });
     if (app.mediaRecorder && app.mediaRecorder.state !== "inactive") {
+      try {
+        app.mediaRecorder.requestData?.();
+      } catch {}
       app.mediaRecorder.stop();
+      stopRecordingStream();
+      updateRecordingButtons("録音を停止しています");
+      return app.recordingStopPromise;
     }
+    stopRecordingStream();
+    return app.recordingStopPromise || Promise.resolve();
   }
 
-  async function saveRecordingMemo() {
+  async function ensureRecordingStopped() {
+    if (app.mediaRecorder && app.mediaRecorder.state !== "inactive") {
+      await stopRecording();
+      return;
+    }
+    if (app.recordingStopPromise) await app.recordingStopPromise;
+  }
+
+  async function finalizeStoppedRecording() {
     await wait(300);
     const mimeType = app.mediaRecorder?.mimeType || "audio/webm";
     const blob = new Blob(app.recordingChunks, { type: mimeType });
-    const textarea = document.getElementById("quickMemoText");
-    const body = app.recordingBaseText.trim() || "録音メモ";
     const transcript = app.recordingTranscript.trim();
     const durationSeconds = Math.round((Date.now() - app.recordingStartedAt) / 1000);
-    app.recordingStream?.getTracks().forEach((track) => track.stop());
-    app.mediaRecorder = null;
-    app.recordingStream = null;
-    app.recordingBaseText = "";
-    app.recordingTranscript = "";
-    updateTranscriptPreview("");
-    const now = nowIso();
-    app.state.memos.unshift(normalizeMemo({
-      id: uid("memo"),
-      title: firstLine(body) || firstLine(transcript) || "録音メモ",
-      body,
-      transcript,
-      recordings: [{
+    if (blob.size) {
+      app.pendingRecordings.push({
         id: uid("audio"),
         name: `${formatLongDate(todayIso())} ${durationSeconds}秒`,
         mimeType,
         durationSeconds,
         blob,
-        createdAt: now
-      }],
-      createdAt: now,
-      updatedAt: now
-    }));
-    if (textarea) textarea.value = "";
-    await saveState();
-    render();
-    showToast("録音メモを保存しました。");
+        createdAt: nowIso()
+      });
+    }
+    if (transcript) {
+      app.pendingRecordingTranscript = appendText(app.pendingRecordingTranscript, transcript);
+    }
+    stopRecordingStream();
+    app.mediaRecorder = null;
+    app.recordingChunks = [];
+    app.recordingStartedAt = 0;
+    app.recordingBaseText = "";
+    app.recordingTranscript = "";
+    updateTranscriptPreview(getRecordingPreviewText());
+    updateRecordingButtons(app.pendingRecordings.length ? "録音停止済み（保存待ち）" : "");
+    app.recordingStopResolve?.();
+    app.recordingStopPromise = null;
+    app.recordingStopResolve = null;
+    showToast("録音を停止しました。保存するとメモに入ります。");
   }
 
   function startTranscription(options = {}) {
@@ -1539,8 +1565,8 @@
       }
       if (finalText && textarea) {
         if (options.recording) {
-          app.recordingTranscript = `${app.recordingTranscript}${finalText}`;
-          updateTranscriptPreview(app.recordingTranscript);
+          app.recordingTranscript = appendText(app.recordingTranscript, finalText);
+          updateTranscriptPreview(getRecordingPreviewText());
         } else {
           textarea.value = `${textarea.value}${textarea.value ? "\n" : ""}${finalText}`;
         }
@@ -1550,7 +1576,7 @@
         : (interimText ? `文字起こし中: ${interimText}` : "文字起こし中"));
     });
     recognition.addEventListener("end", () => {
-      app.recognition = null;
+      if (app.recognition === recognition) app.recognition = null;
       updateRecordingButtons();
     });
     try {
@@ -1566,9 +1592,15 @@
     }
   }
 
-  function stopTranscription() {
-    app.recognition?.stop();
+  function stopTranscription(options = {}) {
+    const recognition = app.recognition;
     app.recognition = null;
+    if (recognition) {
+      try {
+        if (options.abort && typeof recognition.abort === "function") recognition.abort();
+        else recognition.stop();
+      } catch {}
+    }
     updateRecordingButtons();
   }
 
@@ -1580,7 +1612,8 @@
     document.querySelectorAll('[data-action="start-transcription"]').forEach((button) => { button.disabled = isRecognizing; });
     document.querySelectorAll('[data-action="stop-transcription"]').forEach((button) => { button.disabled = !isRecognizing; });
     const statusEl = document.getElementById("recordingStatus");
-    if (statusEl) statusEl.textContent = status || (isRecording ? "録音中 / 文字起こし中" : "録音待機中");
+    const hasPendingRecording = app.pendingRecordings.length || app.pendingRecordingTranscript.trim();
+    if (statusEl) statusEl.textContent = status || (isRecording ? "録音中 / 文字起こし中" : (hasPendingRecording ? "録音停止済み（保存待ち）" : "録音待機中"));
   }
 
   function updateTranscriptPreview(text) {
@@ -1589,6 +1622,27 @@
     const clean = String(text || "").trim();
     preview.textContent = clean ? `文字起こし: ${truncate(clean, 260)}` : "";
     preview.classList.toggle("hidden", !clean);
+  }
+
+  function stopRecordingStream() {
+    app.recordingStream?.getTracks().forEach((track) => track.stop());
+    app.recordingStream = null;
+  }
+
+  function appendText(base, addition) {
+    const left = String(base || "").trim();
+    const right = String(addition || "").trim();
+    if (!left) return right;
+    if (!right) return left;
+    return `${left}\n${right}`;
+  }
+
+  function getRecordingPreviewText() {
+    return appendText(app.pendingRecordingTranscript, app.recordingTranscript);
+  }
+
+  function getMemoPreviewText(memo) {
+    return memo.body || memo.transcript || memo.decisions || memo.nextActions || memo.agenda || "";
   }
 
   function wait(ms) {
