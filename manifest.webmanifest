@@ -1,13 +1,13 @@
 {
   "name": "Claris / クラリス",
   "short_name": "Claris",
-  "description": "ローカル保存で使う自分用タスク、メモ、方針管理アプリ",
+  "description": "Clarify + Assist を由来にした、タスク、メモ、方針を整理するローカル保存アプリ",
   "lang": "ja",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f7f3eb",
-  "theme_color": "#243c38",
+  "background_color": "#f6f5f2",
+  "theme_color": "#1f3430",
   "icons": [
     {
       "src": "icons/icon-180.png",

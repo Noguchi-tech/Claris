@@ -2,7 +2,7 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#243c38">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Claris">
@@ -10,16 +10,16 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/icon-180.png">
     <link rel="icon" href="icons/claris-icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css?v=20260516-claris2">
+    <link rel="stylesheet" href="styles.css?v=20260516-claris3">
     <title>Claris / クラリス</title>
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true">C</span>
+          <span class="brand-mark" aria-hidden="true"><span>C</span></span>
           <div class="brand-copy">
-            <span class="app-name">Claris / クラリス</span>
+            <span id="appName" class="app-name">Claris / クラリス</span>
             <h1 id="viewTitle">今日</h1>
           </div>
         </div>
@@ -27,14 +27,6 @@
           <button class="icon-button" type="button" data-action="open-settings" aria-label="設定">⋯</button>
         </div>
       </header>
-
-      <section class="day-strip" aria-label="今日の概要">
-        <div>
-          <span id="todayLabel" class="today-label"></span>
-          <span id="workerLabel" class="worker-label"></span>
-        </div>
-        <button class="ghost-button compact" type="button" data-action="quick-import">GPT書き込み</button>
-      </section>
 
       <main id="view" class="view" tabindex="-1"></main>
 
@@ -68,6 +60,6 @@
     <dialog id="conflictDialog" class="sheet-dialog conflict-dialog"></dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="app.js?v=20260516-claris2" defer></script>
+    <script src="app.js?v=20260516-claris3" defer></script>
   </body>
 </html>

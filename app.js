@@ -54,8 +54,7 @@
   const conflictDialog = document.getElementById("conflictDialog");
   const view = document.getElementById("view");
   const viewTitle = document.getElementById("viewTitle");
-  const todayLabel = document.getElementById("todayLabel");
-  const workerLabel = document.getElementById("workerLabel");
+  const appName = document.getElementById("appName");
   const toast = document.getElementById("toast");
 
   document.addEventListener("DOMContentLoaded", init);
@@ -131,6 +130,7 @@
       ui: {
         activeTab: "today",
         taskFilter: "all",
+        calendarFilter: "all",
         calendarMonth: monthKey(new Date()),
         selectedDate: todayIso()
       },
@@ -145,7 +145,8 @@
         createdAt,
         updatedAt: createdAt
       })),
-      projects: []
+      projects: [],
+      deletedItems: []
     };
   }
 
@@ -160,10 +161,12 @@
       memos: Array.isArray(saved.memos) ? saved.memos : [],
       policies: Array.isArray(saved.policies) ? saved.policies : [],
       departments: Array.isArray(saved.departments) && saved.departments.length ? saved.departments : base.departments,
-      projects: Array.isArray(saved.projects) ? saved.projects : []
+      projects: Array.isArray(saved.projects) ? saved.projects : [],
+      deletedItems: Array.isArray(saved.deletedItems) ? saved.deletedItems : []
     };
     merged.tasks = merged.tasks.map(normalizeTask);
     merged.memos = merged.memos.map(normalizeMemo);
+    merged.deletedItems = merged.deletedItems.map(normalizeDeletedItem);
     return merged;
   }
 
@@ -196,6 +199,7 @@
       agenda: memo.agenda || "",
       decisions: memo.decisions || "",
       nextActions: memo.nextActions || "",
+      transcript: memo.transcript || "",
       dueDate: memo.dueDate || "",
       priority: priorityMeta[memo.priority] ? memo.priority : "NONE",
       departmentId: memo.departmentId || "",
@@ -204,6 +208,16 @@
       recordings: Array.isArray(memo.recordings) ? memo.recordings : [],
       createdAt: memo.createdAt || nowIso(),
       updatedAt: memo.updatedAt || nowIso()
+    };
+  }
+
+  function normalizeDeletedItem(item) {
+    return {
+      id: item.id || uid("deleted"),
+      kind: item.kind || "item",
+      title: item.title || "削除済み",
+      deletedAt: item.deletedAt || nowIso(),
+      item: item.item || {}
     };
   }
 
@@ -219,8 +233,7 @@
   function render() {
     const activeTab = app.state.ui.activeTab || "today";
     viewTitle.textContent = tabs[activeTab] || "今日";
-    todayLabel.textContent = formatLongDate(todayIso());
-    workerLabel.textContent = buildHeaderAssigneeLabel();
+    if (appName) appName.textContent = `Claris / クラリス　　${formatHeaderDate(todayIso())}`;
     renderNav(activeTab);
     if (activeTab === "calendar") renderCalendarView();
     if (activeTab === "tasks") renderTasksView();
@@ -256,7 +269,7 @@
       <section class="dashboard-grid" aria-label="今日の数">
         ${renderStat("実施", todayTasks.length)}
         ${renderStat("DL超過", overdue.length)}
-        ${renderStat("メモ", app.state.memos.length)}
+        ${renderStat("めも", app.state.memos.length)}
         ${renderStat("方針", relatedPolicies.length)}
       </section>
       ${overdue.length ? renderTaskSection("DL超過", overdue, "DLが過ぎています") : ""}
@@ -311,9 +324,14 @@
   function renderCalendarView() {
     const current = parseMonthKey(app.state.ui.calendarMonth || monthKey(new Date()));
     const selectedDate = app.state.ui.selectedDate || todayIso();
+    const filter = app.state.ui.calendarFilter || "all";
     const days = buildCalendarDays(current.year, current.month);
-    const selectedTasks = sortCalendarTasks(app.state.tasks.filter((task) => task.actionDate === selectedDate || task.dueDate === selectedDate));
-    const selectedPolicies = app.state.policies.filter((policy) => isDateInPolicy(selectedDate, policy));
+    const selectedTasks = sortCalendarTasks(app.state.tasks.filter((task) =>
+      matchesCalendarTaskFilter(task, filter) && (task.actionDate === selectedDate || task.dueDate === selectedDate)
+    ));
+    const selectedPolicies = app.state.policies.filter((policy) =>
+      matchesCalendarPolicyFilter(policy, filter) && isDateInPolicy(selectedDate, policy)
+    );
 
     view.innerHTML = `
       <section class="calendar-shell">
@@ -322,11 +340,17 @@
           <h2 class="section-title">${current.year}年${current.month + 1}月</h2>
           <button class="mini-button" type="button" data-action="month-next">翌月</button>
         </div>
+        <label class="field calendar-filter">
+          <span>表示</span>
+          <select id="calendarFilter">
+            ${renderCalendarFilterOptions(filter)}
+          </select>
+        </label>
         <div class="calendar-grid" aria-label="カレンダー">
-          ${["日", "月", "火", "水", "木", "金", "土"].map((day) => `<div class="weekday">${day}</div>`).join("")}
-          ${days.map((day) => renderDayCell(day, selectedDate)).join("")}
+          ${["月", "火", "水", "木", "金", "土", "日"].map((day) => `<div class="weekday">${day}</div>`).join("")}
+          ${days.map((day) => renderDayCell(day, selectedDate, filter)).join("")}
         </div>
-        ${renderCalendarPolicyFocus(selectedDate)}
+        ${renderCalendarPolicyFocus(selectedDate, filter)}
         <div class="calendar-day-detail">
           <div class="section-head">
             <h2 class="section-title">${formatLongDate(selectedDate)}の予定</h2>
@@ -339,11 +363,17 @@
     `;
   }
 
-  function renderDayCell(day, selectedDate) {
+  function renderDayCell(day, selectedDate, filter) {
     const iso = toDateInputValue(day.date);
-    const actionTasks = app.state.tasks.filter((task) => task.status === "active" && task.actionDate === iso);
-    const dueTasks = app.state.tasks.filter((task) => task.status === "active" && task.dueDate === iso);
-    const policyCount = app.state.policies.filter((policy) => isDateInPolicy(iso, policy)).length;
+    const actionTasks = app.state.tasks.filter((task) =>
+      task.status === "active" && task.actionDate === iso && matchesCalendarTaskFilter(task, filter)
+    );
+    const dueTasks = app.state.tasks.filter((task) =>
+      task.status === "active" && task.dueDate === iso && matchesCalendarTaskFilter(task, filter)
+    );
+    const policyCount = app.state.policies.filter((policy) =>
+      matchesCalendarPolicyFilter(policy, filter) && isDateInPolicy(iso, policy)
+    ).length;
     const classes = [
       "day-cell",
       day.inMonth ? "" : "is-muted",
@@ -355,10 +385,12 @@
       <button class="${classes}" type="button" data-action="select-day" data-date="${iso}">
         <span class="day-number">${day.date.getDate()}</span>
         ${renderDayPrioritySummary(actionTasks)}
-        ${actionTasks.length ? `<span class="day-badge">作業 ${actionTasks.length}</span>` : ""}
-        ${dueTasks.length ? `<span class="day-badge due-badge">DL ${dueTasks.length}</span>` : ""}
-        ${policyCount ? `<span class="day-badge">方針 ${policyCount}</span>` : ""}
-        ${renderCalendarPeriodLines(iso)}
+        <span class="day-metrics">
+          ${actionTasks.length ? `<span>実${actionTasks.length}</span>` : ""}
+          ${dueTasks.length ? `<span class="due-badge">DL${dueTasks.length}</span>` : ""}
+          ${policyCount ? `<span>方${policyCount}</span>` : ""}
+        </span>
+        ${renderCalendarPeriodLines(iso, filter)}
       </button>
     `;
   }
@@ -367,16 +399,16 @@
     const count = (priority) => actionTasks.filter((task) => task.priority === priority).length;
     return `
       <span class="day-priority-row" aria-label="作業優先度">
-        <span>最${count("P1") ? "○" : "×"}</span>
-        <span>2次${count("P2") ? "○" : "×"}</span>
-        <span>3次${count("P3") ? "○" : "×"}</span>
-        <span>サブ${count("SUB")}</span>
+        <span>最${count("P1") ? "●" : "・"}</span>
+        <span>2${count("P2") ? "●" : "・"}</span>
+        <span>3${count("P3") ? "●" : "・"}</span>
+        ${count("SUB") ? `<span>サ${count("SUB")}</span>` : ""}
       </span>
     `;
   }
 
-  function renderCalendarPeriodLines(isoDate) {
-    const periods = getCalendarPeriodsForDate(isoDate).slice(0, 3);
+  function renderCalendarPeriodLines(isoDate, filter) {
+    const periods = getCalendarPeriodsForDate(isoDate, filter).slice(0, 3);
     if (!periods.length) return "";
     return `
       <span class="period-lines" aria-label="期間">
@@ -393,8 +425,10 @@
     `;
   }
 
-  function renderCalendarPolicyFocus(date) {
-    const policies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
+  function renderCalendarPolicyFocus(date, filter) {
+    const policies = app.state.policies.filter((policy) =>
+      matchesCalendarPolicyFilter(policy, filter) && isDateInPolicy(date, policy)
+    );
     if (!policies.length) return "";
     const groups = [
       ["週次", policies.filter((policy) => /週/.test(policy.type || ""))],
@@ -431,9 +465,10 @@
           <span class="recording-status" id="recordingStatus">録音待機中</span>
         </div>
         <textarea id="quickMemoText" placeholder="とっさの話し合い、指示、気づきをそのまま入力"></textarea>
+        <div id="recordingTranscriptPreview" class="transcript-preview hidden" aria-live="polite"></div>
         <div class="recording-bar">
           <button class="solid-button compact" type="button" data-action="save-quick-memo">保存</button>
-          <button class="ghost-button compact" type="button" data-action="start-recording">録音＋文字起こし</button>
+          <button class="ghost-button compact" type="button" data-action="start-recording">録音</button>
           <button class="ghost-button compact" type="button" data-action="stop-recording" disabled>停止</button>
         </div>
       </section>
@@ -499,7 +534,12 @@
     const project = findById(app.state.projects, task.projectId);
     const linkedMemos = getLinkedMemos(task);
     const memoSummary = shouldShowMemos(task, linkedMemos)
-      ? `<div class="memo-summary">${linkedMemos.map((memo) => escapeHtml(summarizeMemo(memo))).join("<br>")}</div>`
+      ? `<div class="memo-summary">${linkedMemos.map((memo) => `
+          <button class="memo-link-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">
+            <strong>${escapeHtml(memo.title || "メモ")}</strong>
+            <span>${escapeHtml(summarizeMemo(memo))}</span>
+          </button>
+        `).join("")}</div>`
       : "";
     const completed = task.status === "completed";
     return `
@@ -537,7 +577,7 @@
     return `
       <article class="memo-card">
         <div class="section-head">
-          <h3>${escapeHtml(memo.title || "メモ")}</h3>
+          <h3><button class="title-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">${escapeHtml(memo.title || "メモ")}</button></h3>
           <span class="priority-pill ${(priorityMeta[memo.priority] || priorityMeta.NONE).className}">${(priorityMeta[memo.priority] || priorityMeta.NONE).label}</span>
         </div>
         <div class="meta-row">
@@ -548,6 +588,7 @@
           ${recordings.length ? `<span class="tag">録音 ${recordings.length}</span>` : ""}
         </div>
         ${memo.body ? `<p class="body-preview">${escapeHtml(truncate(memo.body, 180))}</p>` : ""}
+        ${memo.transcript ? `<div class="memo-summary"><strong>文字起こし</strong> ${escapeHtml(truncate(memo.transcript, 220))}</div>` : ""}
         ${memo.agenda || memo.decisions || memo.nextActions ? `
           <div class="memo-summary">
             ${memo.agenda ? `<strong>議題</strong> ${escapeHtml(memo.agenda)}<br>` : ""}
@@ -557,8 +598,6 @@
         ` : ""}
         ${recordings.length ? `<div class="audio-list">${recordings.map(renderRecording).join("")}</div>` : ""}
         <div class="card-actions">
-          <button class="mini-button" type="button" data-action="organize-memo" data-id="${escapeAttr(memo.id)}">整理</button>
-          <button class="mini-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">編集</button>
           <button class="mini-button" type="button" data-action="memo-to-task" data-id="${escapeAttr(memo.id)}">タスク化</button>
           <button class="mini-button" type="button" data-action="delete-memo" data-id="${escapeAttr(memo.id)}">削除</button>
         </div>
@@ -629,8 +668,10 @@
     if (action === "delete-task") await deleteEntity("tasks", id, "タスクを削除しました");
     if (action === "delete-memo") await deleteMemo(id);
     if (action === "delete-policy") await deleteEntity("policies", id, "方針を削除しました");
-    if (action === "organize-memo") await organizeMemo(id);
+    if (action === "classify-memo-form") classifyMemoForm();
     if (action === "memo-to-task") openTaskFromMemo(id);
+    if (action === "restore-deleted-item") await restoreDeletedItem(id);
+    if (action === "purge-deleted-item") await purgeDeletedItem(id);
     if (action === "save-quick-memo") await saveQuickMemo();
     if (action === "start-recording") await startRecording();
     if (action === "stop-recording") stopRecording();
@@ -652,6 +693,11 @@
   async function handleChange(event) {
     if (event.target.id === "taskFilter") {
       app.state.ui.taskFilter = event.target.value;
+      await saveState();
+      render();
+    }
+    if (event.target.id === "calendarFilter") {
+      app.state.ui.calendarFilter = event.target.value;
       await saveState();
       render();
     }
@@ -788,6 +834,9 @@
             <label for="memoBody">本文</label>
             <textarea id="memoBody" name="body" required>${escapeHtml(existing?.body || "")}</textarea>
           </div>
+          <div class="toolbar">
+            <button class="ghost-button compact" type="button" data-action="classify-memo-form">本文から自動判定</button>
+          </div>
           <div class="field-inline">
             <div class="field">
               <label for="memoAgenda">議題</label>
@@ -801,6 +850,10 @@
               <label for="memoNextActions">ネクストアクション</label>
               <textarea id="memoNextActions" name="nextActions">${escapeHtml(existing?.nextActions || "")}</textarea>
             </div>
+          </div>
+          <div class="field">
+            <label for="memoTranscript">文字起こし</label>
+            <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(existing?.transcript || "")}</textarea>
           </div>
           <div class="field-inline">
             <div class="field">
@@ -1131,6 +1184,7 @@
       agenda: String(data.get("agenda") || "").trim(),
       decisions: String(data.get("decisions") || "").trim(),
       nextActions: String(data.get("nextActions") || "").trim(),
+      transcript: String(data.get("transcript") || "").trim(),
       dueDate: String(data.get("dueDate") || ""),
       priority: String(data.get("priority") || "NONE"),
       departmentId: String(data.get("departmentId") || ""),
@@ -1253,6 +1307,9 @@
   }
 
   async function deleteEntity(collection, id, message) {
+    const item = findById(app.state[collection], id);
+    if (!item) return;
+    addDeletedItem(collection, item);
     app.state[collection] = app.state[collection].filter((item) => item.id !== id);
     if (collection === "tasks") {
       app.state.memos.forEach((memo) => {
@@ -1265,6 +1322,9 @@
   }
 
   async function deleteMemo(id) {
+    const memo = findById(app.state.memos, id);
+    if (!memo) return;
+    addDeletedItem("memos", memo);
     app.state.memos = app.state.memos.filter((memo) => memo.id !== id);
     app.state.tasks.forEach((task) => {
       task.memoIds = task.memoIds.filter((memoId) => memoId !== id);
@@ -1274,19 +1334,73 @@
     showToast("メモを削除しました。");
   }
 
-  async function organizeMemo(id) {
-    const memo = findById(app.state.memos, id);
-    if (!memo) return;
-    const organized = organizeText(memo.body);
-    memo.title = memo.title || organized.title;
-    memo.agenda = memo.agenda || organized.agenda;
-    memo.decisions = memo.decisions || organized.decisions;
-    memo.nextActions = memo.nextActions || organized.nextActions;
-    memo.updatedAt = nowIso();
+  function addDeletedItem(kind, item) {
+    app.state.deletedItems.unshift(normalizeDeletedItem({
+      id: uid("deleted"),
+      kind,
+      title: entityTitle(kind, item),
+      deletedAt: nowIso(),
+      item: cloneForStorage(item)
+    }));
+    app.state.deletedItems = app.state.deletedItems.slice(0, 200);
+  }
+
+  async function restoreDeletedItem(id) {
+    const deleted = findById(app.state.deletedItems, id);
+    if (!deleted) return;
+    const kind = deleted.kind;
+    if (kind === "tasks") {
+      const task = normalizeTask(deleted.item);
+      upsertById(app.state.tasks, task);
+      syncMemoLinksForTask(task);
+    }
+    if (kind === "memos") {
+      const memo = normalizeMemo(deleted.item);
+      upsertById(app.state.memos, memo);
+      syncTaskLinksForMemo(memo);
+    }
+    if (kind === "policies") {
+      upsertById(app.state.policies, deleted.item);
+    }
+    app.state.deletedItems = app.state.deletedItems.filter((item) => item.id !== id);
     await saveState();
+    closeDialogs();
     render();
-    openMemoForm(memo);
-    showToast("メモを整理しました。必要に応じて手直ししてください。");
+    openSettings();
+    showToast("削除済みから戻しました。");
+  }
+
+  async function purgeDeletedItem(id) {
+    app.state.deletedItems = app.state.deletedItems.filter((item) => item.id !== id);
+    await saveState();
+    closeDialogs();
+    render();
+    openSettings();
+    showToast("削除済み項目を完全削除しました。");
+  }
+
+  function entityTitle(kind, item) {
+    if (kind === "projects") return item.name || "プロジェクト";
+    if (kind === "departments") return item.name || "部門";
+    return item.title || item.name || "項目";
+  }
+
+  function cloneForStorage(item) {
+    if (typeof structuredClone === "function") return structuredClone(item);
+    return JSON.parse(JSON.stringify(item));
+  }
+
+  function classifyMemoForm() {
+    const form = document.getElementById("memoForm");
+    if (!form) return;
+    const body = String(form.elements.body?.value || "");
+    const transcript = String(form.elements.transcript?.value || "");
+    const organized = organizeText([body, transcript].filter(Boolean).join("\n"));
+    if (!form.elements.title.value.trim()) form.elements.title.value = organized.title;
+    form.elements.agenda.value = organized.agenda;
+    form.elements.decisions.value = organized.decisions;
+    form.elements.nextActions.value = organized.nextActions;
+    showToast("本文と文字起こしから判定しました。保存前に確認してください。");
   }
 
   function openTaskFromMemo(id) {
@@ -1346,6 +1460,7 @@
       const textarea = document.getElementById("quickMemoText");
       app.recordingBaseText = textarea?.value.trim() || "";
       app.recordingTranscript = "";
+      updateTranscriptPreview("");
       app.mediaRecorder.addEventListener("dataavailable", (event) => {
         if (event.data.size) app.recordingChunks.push(event.data);
       });
@@ -1370,18 +1485,21 @@
     const mimeType = app.mediaRecorder?.mimeType || "audio/webm";
     const blob = new Blob(app.recordingChunks, { type: mimeType });
     const textarea = document.getElementById("quickMemoText");
-    const body = combineRecordingText() || "録音メモ";
+    const body = app.recordingBaseText.trim() || "録音メモ";
+    const transcript = app.recordingTranscript.trim();
     const durationSeconds = Math.round((Date.now() - app.recordingStartedAt) / 1000);
     app.recordingStream?.getTracks().forEach((track) => track.stop());
     app.mediaRecorder = null;
     app.recordingStream = null;
     app.recordingBaseText = "";
     app.recordingTranscript = "";
+    updateTranscriptPreview("");
     const now = nowIso();
     app.state.memos.unshift(normalizeMemo({
       id: uid("memo"),
-      title: firstLine(body) || "録音メモ",
+      title: firstLine(body) || firstLine(transcript) || "録音メモ",
       body,
+      transcript,
       recordings: [{
         id: uid("audio"),
         name: `${formatLongDate(todayIso())} ${durationSeconds}秒`,
@@ -1422,7 +1540,7 @@
       if (finalText && textarea) {
         if (options.recording) {
           app.recordingTranscript = `${app.recordingTranscript}${finalText}`;
-          textarea.value = combineRecordingText();
+          updateTranscriptPreview(app.recordingTranscript);
         } else {
           textarea.value = `${textarea.value}${textarea.value ? "\n" : ""}${finalText}`;
         }
@@ -1465,10 +1583,12 @@
     if (statusEl) statusEl.textContent = status || (isRecording ? "録音中 / 文字起こし中" : "録音待機中");
   }
 
-  function combineRecordingText() {
-    const base = app.recordingBaseText.trim();
-    const transcript = app.recordingTranscript.trim();
-    return [base, transcript].filter(Boolean).join(base && transcript ? "\n" : "");
+  function updateTranscriptPreview(text) {
+    const preview = document.getElementById("recordingTranscriptPreview");
+    if (!preview) return;
+    const clean = String(text || "").trim();
+    preview.textContent = clean ? `文字起こし: ${truncate(clean, 260)}` : "";
+    preview.classList.toggle("hidden", !clean);
   }
 
   function wait(ms) {
@@ -1534,6 +1654,13 @@
             <textarea id="settingsImportText" name="settingsImportText" placeholder="JSON / CSV / テキストを貼り付け"></textarea>
             <button class="ghost-button" type="button" data-action="run-import">貼り付け内容を取り込む</button>
           </section>
+          <section class="settings-block">
+            <div class="section-head">
+              <h2 class="section-title">削除済み</h2>
+              <span class="section-count">${app.state.deletedItems.length}件</span>
+            </div>
+            ${renderDeletedItems()}
+          </section>
           <div class="form-actions">
             <button class="text-button" type="button" data-action="close-dialog">閉じる</button>
             <button class="solid-button" type="submit">設定を保存</button>
@@ -1541,6 +1668,30 @@
         </form>
       </div>
     `);
+  }
+
+  function renderDeletedItems() {
+    if (!app.state.deletedItems.length) return `<p class="body-preview">削除したタスク、メモ、方針はここにまとまります。</p>`;
+    return `
+      <div class="deleted-list">
+        ${app.state.deletedItems.slice(0, 40).map((deleted) => `
+          <div class="deleted-row">
+            <div>
+              <strong>${escapeHtml(deleted.title)}</strong>
+              <span>${escapeHtml(deletedKindLabel(deleted.kind))} / ${formatLongDate(deleted.deletedAt.slice(0, 10))}</span>
+            </div>
+            <div class="card-actions">
+              <button class="mini-button" type="button" data-action="restore-deleted-item" data-id="${escapeAttr(deleted.id)}">戻す</button>
+              <button class="mini-button" type="button" data-action="purge-deleted-item" data-id="${escapeAttr(deleted.id)}">完全削除</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function deletedKindLabel(kind) {
+    return ({ tasks: "タスク", memos: "メモ", policies: "方針" })[kind] || "項目";
   }
 
   function renderDepartmentRow(department) {
@@ -1603,7 +1754,7 @@
   function openImportDialog() {
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader("GPT書き込み", "アプリ側のデータを読ませず、貼り付けた内容だけを追加します。")}
+        ${renderSheetHeader("貼り付け取り込み", "アプリ側のデータを読ませず、貼り付けた内容だけを追加します。")}
         <form id="importForm" class="form-grid">
           <div class="field">
             <label for="importText">追加内容</label>
@@ -1721,6 +1872,7 @@
     app.state.policies = Array.isArray(payload.policies) ? payload.policies : app.state.policies;
     app.state.departments = Array.isArray(payload.departments) && payload.departments.length ? payload.departments : app.state.departments;
     app.state.projects = Array.isArray(payload.projects) ? payload.projects : app.state.projects;
+    app.state.deletedItems = Array.isArray(payload.deletedItems) ? payload.deletedItems.map(normalizeDeletedItem) : app.state.deletedItems;
     app.state.updatedAt = now;
   }
 
@@ -1754,8 +1906,11 @@
         agenda: memo.agenda || memo.議題 || "",
         decisions: memo.decisions || memo.決定 || "",
         nextActions: memo.nextActions || memo.次 || "",
+        transcript: memo.transcript || memo.文字起こし || "",
         dueDate: toDateInputValueFromUnknown(memo.dueDate || memo.DL || memo.期限),
-        priority: normalizePriority(memo.priority || memo.優先度)
+        priority: normalizePriority(memo.priority || memo.優先度),
+        departmentId: matchDepartmentId(memo.department || memo.departmentName || memo.部門),
+        projectId: matchProjectId(memo.project || memo.projectName || memo.プロジェクト)
       })).filter((memo) => memo.body || memo.title),
       policies: source.policies || []
     };
@@ -1882,6 +2037,26 @@
           createdAt: recording.createdAt,
           blobOmitted: true
         }))
+      })),
+      deletedItems: app.state.deletedItems.map((deleted) => ({
+        ...deleted,
+        item: sanitizePortableEntity(deleted.item)
+      }))
+    };
+  }
+
+  function sanitizePortableEntity(item) {
+    if (!item || typeof item !== "object") return item;
+    if (!Array.isArray(item.recordings)) return item;
+    return {
+      ...item,
+      recordings: item.recordings.map((recording) => ({
+        id: recording.id,
+        name: recording.name,
+        mimeType: recording.mimeType,
+        durationSeconds: recording.durationSeconds,
+        createdAt: recording.createdAt,
+        blobOmitted: true
       }))
     };
   }
@@ -1928,6 +2103,19 @@
     return `<option value="">未設定</option>${app.state.departments.map((department) =>
       `<option value="${escapeAttr(department.id)}"${selected(current, department.id)}>${escapeHtml(department.name)}</option>`
     ).join("")}`;
+  }
+
+  function renderCalendarFilterOptions(current) {
+    return `
+      <option value="all"${selected(current, "all")}>すべて</option>
+      <option value="no-dept"${selected(current, "no-dept")}>部門未設定</option>
+      ${app.state.departments.map((department) =>
+        `<option value="dept:${escapeAttr(department.id)}"${selected(current, `dept:${department.id}`)}>部門: ${escapeHtml(department.name)}</option>`
+      ).join("")}
+      ${app.state.projects.map((project) =>
+        `<option value="project:${escapeAttr(project.id)}"${selected(current, `project:${project.id}`)}>PJ: ${escapeHtml(project.name)}</option>`
+      ).join("")}
+    `;
   }
 
   function renderProjectOptions(current) {
@@ -2070,8 +2258,33 @@
     return date >= start && date <= end;
   }
 
-  function getCalendarPeriodsForDate(date) {
+  function matchesCalendarTaskFilter(task, filter = "all") {
+    if (!filter || filter === "all") return true;
+    if (filter === "no-dept") return !task.departmentId;
+    if (filter.startsWith("dept:")) return task.departmentId === filter.slice(5);
+    if (filter.startsWith("project:")) return task.projectId === filter.slice(8);
+    return true;
+  }
+
+  function matchesCalendarPolicyFilter(policy, filter = "all") {
+    if (!filter || filter === "all") return true;
+    if (filter === "no-dept") return !policy.departmentId;
+    if (filter.startsWith("dept:")) return policy.departmentId === filter.slice(5);
+    if (filter.startsWith("project:")) return false;
+    return true;
+  }
+
+  function matchesCalendarPeriodFilter(period, filter = "all") {
+    if (!filter || filter === "all") return true;
+    if (filter === "no-dept") return !period.departmentId;
+    if (filter.startsWith("dept:")) return period.departmentId === filter.slice(5);
+    if (filter.startsWith("project:")) return period.projectId === filter.slice(8);
+    return true;
+  }
+
+  function getCalendarPeriodsForDate(date, filter = "all") {
     return getCalendarPeriods()
+      .filter((period) => matchesCalendarPeriodFilter(period, filter))
       .filter((period) => date >= period.start && date <= period.end)
       .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end) || a.title.localeCompare(b.title));
   }
@@ -2084,7 +2297,9 @@
         title: policy.title,
         start: policy.periodStart || policy.periodEnd,
         end: policy.periodEnd || policy.periodStart,
-        type: policy.type || "方針"
+        type: policy.type || "方針",
+        departmentId: policy.departmentId || "",
+        projectId: ""
       }));
     const projectPeriods = app.state.projects
       .filter((project) => project.startDate || project.endDate)
@@ -2093,7 +2308,9 @@
         title: project.name,
         start: project.startDate || project.endDate,
         end: project.endDate || project.startDate,
-        type: "プロジェクト"
+        type: "プロジェクト",
+        departmentId: project.departmentId || "",
+        projectId: project.id
       }));
     return [...policyPeriods, ...projectPeriods].filter((period) => period.start && period.end);
   }
@@ -2107,7 +2324,8 @@
 
   function buildCalendarDays(year, month) {
     const first = new Date(year, month, 1);
-    const start = new Date(year, month, 1 - first.getDay());
+    const mondayBasedOffset = (first.getDay() + 6) % 7;
+    const start = new Date(year, month, 1 - mondayBasedOffset);
     return Array.from({ length: 42 }, (_, index) => {
       const date = new Date(start);
       date.setDate(start.getDate() + index);
@@ -2172,6 +2390,12 @@
   function formatLongDate(isoDate) {
     const date = new Date(`${isoDate}T00:00:00`);
     return new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric", weekday: "long" }).format(date);
+  }
+
+  function formatHeaderDate(isoDate) {
+    const date = new Date(`${isoDate}T00:00:00`);
+    const weekday = new Intl.DateTimeFormat("ja-JP", { weekday: "short" }).format(date);
+    return `${date.getMonth() + 1}月${date.getDate()}日(${weekday})`;
   }
 
   function formatShortDate(isoDate) {
