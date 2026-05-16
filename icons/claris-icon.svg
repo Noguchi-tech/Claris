@@ -10,7 +10,7 @@
       <stop offset="1" stop-color="#ff9e4d"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="100" fill="#fffdf9"/>
+  <rect width="512" height="512" fill="#fffdf9"/>
   <path d="M334 148c-33-32-79-51-128-51-94 0-171 76-171 170s77 169 171 169c47 0 90-18 122-47" fill="none" stroke="url(#clarisLine)" stroke-width="28" stroke-linecap="round"/>
   <path d="M318 190c-28-26-67-42-110-42-65 0-121 39-146 95" fill="none" stroke="url(#clarisLine)" stroke-width="22" stroke-linecap="round" opacity=".9"/>
   <path d="M208 256h88M208 288h68M208 320h42" fill="none" stroke="url(#clarisLine)" stroke-width="14" stroke-linecap="round"/>

@@ -74,6 +74,8 @@
   const view = document.getElementById("view");
   const viewTitle = document.getElementById("viewTitle");
   const appName = document.getElementById("appName");
+  const headerDate = document.getElementById("headerDate");
+  const bottomNav = document.querySelector(".bottom-nav");
   const toast = document.getElementById("toast");
 
   document.addEventListener("DOMContentLoaded", init);
@@ -156,7 +158,6 @@
         entryKind: "all",
         entryFilter: "all",
         entrySearch: "",
-        calendarFilter: "all",
         calendarMonth: monthKey(new Date()),
         selectedDate: todayIso()
       },
@@ -275,7 +276,8 @@
     const activeTab = normalizeActiveTab(app.state.ui.activeTab || "today");
     app.state.ui.activeTab = activeTab;
     viewTitle.textContent = tabs[activeTab] || "今日";
-    if (appName) appName.textContent = `Claris / クラリス　　${formatHeaderDate(todayIso())}`;
+    if (appName) appName.textContent = "Claris / クラリス";
+    if (headerDate) headerDate.textContent = formatHeaderDate(todayIso());
     renderNav(activeTab);
     if (activeTab === "calendar") renderCalendarView();
     if (activeTab === "today") renderTodayView();
@@ -283,6 +285,11 @@
   }
 
   function renderNav(activeTab) {
+    const navIndex = ["calendar", "today", "entries"].indexOf(activeTab);
+    if (bottomNav) {
+      const offsets = ["0px", "calc(100% + 4px)", "calc(200% + 8px)"];
+      bottomNav.style.setProperty("--nav-offset", offsets[Math.max(navIndex, 0)] || offsets[1]);
+    }
     document.querySelectorAll("[data-tab]").forEach((button) => {
       button.classList.toggle("is-active", button.dataset.tab === activeTab);
     });
@@ -312,10 +319,10 @@
 
     view.innerHTML = `
       <section class="dashboard-grid" aria-label="今日の数">
-        ${renderStat("実施", todayTasks.length)}
-        ${renderStat("DL超過", overdue.length)}
-        ${renderStat("めも", app.state.memos.length)}
-        ${renderStat("方針", relatedPolicies.length)}
+        ${renderStat("実施", todayTasks.length, "tasks")}
+        ${renderStat("DL超過", overdue.length, "overdue")}
+        ${renderStat("メモ", app.state.memos.length, "memos")}
+        ${renderStat("方針", relatedPolicies.length, "policies")}
       </section>
       ${overdue.length ? renderTaskSection("DL超過", overdue, "DLが過ぎています") : ""}
       ${["P1", "P2", "P3", "SUB"].map((priority) => {
@@ -427,7 +434,7 @@
   function renderCalendarView() {
     const current = parseMonthKey(app.state.ui.calendarMonth || monthKey(new Date()));
     const selectedDate = app.state.ui.selectedDate || todayIso();
-    const filter = app.state.ui.calendarFilter || "all";
+    const filter = "all";
     const days = buildCalendarDays(current.year, current.month);
     const selectedTasks = sortCalendarTasks(app.state.tasks.filter((task) =>
       matchesCalendarTaskFilter(task, filter) &&
@@ -444,17 +451,11 @@
           <h2 class="section-title">${current.year}年${current.month + 1}月</h2>
           <button class="mini-button" type="button" data-action="month-next">翌月</button>
         </div>
-        <label class="field calendar-filter">
-          <span>表示</span>
-          <select id="calendarFilter">
-            ${renderCalendarFilterOptions(filter)}
-          </select>
-        </label>
+        ${renderCalendarPeriodSummary(selectedDate)}
         <div class="calendar-grid" aria-label="カレンダー">
           ${["月", "火", "水", "木", "金", "土", "日"].map((day) => `<div class="weekday">${day}</div>`).join("")}
           ${days.map((day) => renderDayCell(day, selectedDate, filter)).join("")}
         </div>
-        ${renderCalendarPolicyFocus(selectedDate, filter)}
         <div class="calendar-day-detail">
           <div class="section-head">
             <h2 class="section-title">${formatLongDate(selectedDate)}の予定</h2>
@@ -475,9 +476,6 @@
     const dueTasks = app.state.tasks.filter((task) =>
       task.status === "active" && task.dueDate === iso && matchesCalendarTaskFilter(task, filter)
     );
-    const policyCount = app.state.policies.filter((policy) =>
-      matchesCalendarPolicyFilter(policy, filter) && isDateInPolicy(iso, policy)
-    ).length;
     const classes = [
       "day-cell",
       day.inMonth ? "" : "is-muted",
@@ -489,11 +487,7 @@
       <button class="${classes}" type="button" data-action="select-day" data-date="${iso}">
         <span class="day-number">${day.date.getDate()}</span>
         ${renderDayPrioritySummary(actionTasks)}
-        <span class="day-metrics">
-          ${actionTasks.length ? `<span>実${actionTasks.length}</span>` : ""}
-          ${dueTasks.length ? `<span class="due-badge">DL${dueTasks.length}</span>` : ""}
-          ${policyCount ? `<span>方${policyCount}</span>` : ""}
-        </span>
+        ${renderCalendarDueLine(dueTasks.length)}
         ${renderCalendarPeriodLines(iso, filter)}
       </button>
     `;
@@ -532,6 +526,38 @@
           return `<span class="${classes}" title="${escapeAttr(period.title)}"></span>`;
         }).join("")}
       </span>
+    `;
+  }
+
+  function renderCalendarDueLine(count) {
+    if (!count) return "";
+    return `
+      <span class="due-lines" aria-label="DL ${count}件">
+        <span class="due-line" title="DL ${count}件"></span>
+      </span>
+    `;
+  }
+
+  function renderCalendarPeriodSummary(date) {
+    const periods = getCalendarPeriodsForDate(date, "all").slice(0, 4);
+    return `
+      <section class="calendar-period-summary" aria-label="選択日の期間">
+        <span class="period-summary-label">期間</span>
+        <div class="period-summary-list">
+          ${periods.length ? periods.map((period) => {
+            const classes = [
+              "period-summary-item",
+              `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
+            ].join(" ");
+            return `
+              <span class="${classes}">
+                <strong>${escapeHtml(period.type || "期間")}</strong>
+                <span>${escapeHtml(truncate(period.title, 18))}</span>
+              </span>
+            `;
+          }).join("") : `<span class="period-summary-empty">期間登録なし</span>`}
+        </div>
+      </section>
     `;
   }
 
@@ -617,13 +643,51 @@
     `;
   }
 
-  function renderStat(label, value) {
+  function renderStat(label, value, summary) {
     return `
-      <div class="stat-tile">
+      <button class="stat-tile" type="button" data-action="open-today-summary" data-summary="${escapeAttr(summary || "")}">
         <div class="stat-value">${value}</div>
         <div class="stat-label">${escapeHtml(label)}</div>
-      </div>
+      </button>
     `;
+  }
+
+  function openTodaySummaryDialog(kind) {
+    const date = todayIso();
+    const activeTasks = app.state.tasks.filter((task) => task.status === "active");
+    const todayTasks = sortTasks(activeTasks.filter((task) => taskOccursOnDate(task, date) && !isTaskCompletedForDate(task, date)));
+    const overdue = sortTasks(activeTasks.filter((task) => task.dueDate && task.dueDate < date && !taskOccursOnDate(task, date)));
+    const memos = [...app.state.memos].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const policies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
+    const summary = {
+      tasks: {
+        title: "今日の実施",
+        subtitle: `${formatLongDate(date)}に実施するタスク`,
+        html: todayTasks.length ? `<div class="task-list">${todayTasks.map((task) => renderTaskCard(task, date)).join("")}</div>` : renderEmpty("今日の実施タスクはありません。")
+      },
+      overdue: {
+        title: "DL超過",
+        subtitle: "DLを過ぎている未完了タスク",
+        html: overdue.length ? `<div class="task-list">${overdue.map((task) => renderTaskCard(task)).join("")}</div>` : renderEmpty("DL超過タスクはありません。")
+      },
+      memos: {
+        title: "メモ",
+        subtitle: "保存済みメモ",
+        html: memos.length ? `<div class="memo-list">${memos.map(renderMemoCard).join("")}</div>` : renderEmpty("メモはありません。", "メモを追加")
+      },
+      policies: {
+        title: "今日の方針",
+        subtitle: `${formatLongDate(date)}の期間に入る方針`,
+        html: policies.length ? `<div class="policy-list">${policies.map(renderPolicyCard).join("")}</div>` : renderEmpty("今日の期間に入る方針はありません。", "方針を追加")
+      }
+    }[kind] || null;
+    if (!summary) return;
+    openSheet(`
+      <div class="sheet">
+        ${renderSheetHeader(summary.title, summary.subtitle)}
+        ${summary.html}
+      </div>
+    `);
   }
 
   function renderTaskSection(title, tasks, emptyText, actionHtml = "", contextDate = "") {
@@ -771,6 +835,7 @@
     if (action === "close-dialog") closeDialogs();
     if (action === "open-kind") openKind(button.dataset.kind);
     if (action === "set-entry-kind") await setEntryKind(button.dataset.kind);
+    if (action === "open-today-summary") openTodaySummaryDialog(button.dataset.summary);
     if (action === "select-priority-slot") selectPrioritySlot(button);
     if (action === "edit-task") openTaskForm(findById(app.state.tasks, id));
     if (action === "edit-memo") openMemoForm(findById(app.state.memos, id));
@@ -831,11 +896,6 @@
       await saveState();
       render();
     }
-    if (event.target.id === "calendarFilter") {
-      app.state.ui.calendarFilter = event.target.value;
-      await saveState();
-      render();
-    }
   }
 
   function handleInput(event) {
@@ -886,14 +946,14 @@
     const conflictTarget = button.closest("#conflictMoveAvailability");
     if (conflictTarget) {
       const input = document.getElementById("conflictMovePriority");
-      if (input) input.value = priority;
+      if (input) input.value = input.value === priority ? "NONE" : priority;
       updateConflictMovePreview();
       return;
     }
     const form = button.closest("form");
     const input = form?.elements.priority;
     if (!input) return;
-    input.value = priority;
+    input.value = input.value === priority ? "NONE" : priority;
     updateTaskPriorityPreview(form);
   }
 
@@ -1277,16 +1337,14 @@
     if (!date && form.elements.priority) form.elements.priority.value = "NONE";
     const selectedPriority = String(form.elements.priority?.value || "");
     const currentId = form.dataset.id || "";
-    target.innerHTML = renderPrioritySelector(date, currentId, selectedPriority, [], { includeNone: true });
+    target.innerHTML = renderPrioritySelector(date, currentId, selectedPriority);
   }
 
-  function renderPrioritySelector(date, excludeId = "", selectedPriority = "", extraExcludeIds = [], options = {}) {
-    const includeNone = options.includeNone === true;
+  function renderPrioritySelector(date, excludeId = "", selectedPriority = "", extraExcludeIds = []) {
+    const selected = priorityMeta[selectedPriority] ? selectedPriority : "NONE";
     if (!date) {
-      const noneSelected = !selectedPriority || selectedPriority === "NONE";
       return `
         <div class="availability-row availability-row-empty">
-          ${includeNone ? renderPrioritySlotButton("NONE", "実施日なし", "未設定", noneSelected, false, 0) : ""}
           <span class="availability-note">実施日を選ぶと、その日の優先度の空き状況を表示します。</span>
         </div>
       `;
@@ -1299,10 +1357,12 @@
       const detail = priority === "SUB"
         ? `${occupants.length}件`
         : (occupied ? truncate(occupants[0].title || "登録済み", 16) : "空き");
-      return renderPrioritySlotButton(priority, label, detail, selectedPriority === priority, occupied, occupants.length);
+      return renderPrioritySlotButton(priority, label, detail, selected === priority, occupied, occupants.length);
     }).join("");
-    const none = includeNone ? renderPrioritySlotButton("NONE", "未設定", "優先度なし", selectedPriority === "NONE", false, 0) : "";
-    return `<div class="availability-row">${rows}${none}</div>`;
+    return `
+      <div class="availability-row">${rows}</div>
+      <p class="availability-note">未選択: 未設定</p>
+    `;
   }
 
   function renderPrioritySlotButton(priority, label, detail, selectedPriority, occupied, count) {
@@ -1402,9 +1462,9 @@
           <section class="conflict-move-box">
             <button class="choice-button conflict-action-button" type="button" data-action="resolve-conflict" data-mode="move-existing">
               <strong>既存を移動して入れる</strong>
-              <span>既存タスクを下の空き状況で選んだ枠へ移し、新規タスクを選択中の枠へ入れる</span>
+              <span>既存タスクを下の移動先へ移し、新規タスクを選択中の枠へ入れる</span>
             </button>
-            <div class="field-inline task-date-row">
+            <div class="conflict-move-controls">
               <div class="field">
                 <label for="conflictMoveDate">既存の移動日</label>
                 <input id="conflictMoveDate" type="date" value="${escapeAttr(task.actionDate)}">
@@ -1433,12 +1493,12 @@
     const conflicts = findPriorityConflicts(task);
     if (mode === "move-existing") {
       const moveDate = document.getElementById("conflictMoveDate")?.value || "";
-      const movePriority = document.getElementById("conflictMovePriority")?.value || "";
+      const movePriority = document.getElementById("conflictMovePriority")?.value || "NONE";
       if (!moveDate || !priorityMeta[movePriority]) {
-        showToast("既存タスクの移動日と優先度を選んでください。");
+        showToast("既存タスクの移動日を選んでください。");
         return;
       }
-      const blocked = movePriority !== "SUB" && getPriorityOccupants(moveDate, movePriority, conflicts.map((item) => item.id).concat(task.id)).length;
+      const blocked = SINGLE_SLOT_PRIORITIES.includes(movePriority) && getPriorityOccupants(moveDate, movePriority, conflicts.map((item) => item.id).concat(task.id)).length;
       if (blocked) {
         showToast("移動先の優先度は埋まっています。別の日付か優先度を選んでください。");
         return;
@@ -2636,19 +2696,6 @@
     return `<option value="">未設定</option>${app.state.departments.map((department) =>
       `<option value="${escapeAttr(department.id)}"${selected(current, department.id)}>${escapeHtml(department.name)}</option>`
     ).join("")}`;
-  }
-
-  function renderCalendarFilterOptions(current) {
-    return `
-      <option value="all"${selected(current, "all")}>すべて</option>
-      <option value="no-dept"${selected(current, "no-dept")}>部門未設定</option>
-      ${app.state.departments.map((department) =>
-        `<option value="dept:${escapeAttr(department.id)}"${selected(current, `dept:${department.id}`)}>部門: ${escapeHtml(department.name)}</option>`
-      ).join("")}
-      ${app.state.projects.map((project) =>
-        `<option value="project:${escapeAttr(project.id)}"${selected(current, `project:${project.id}`)}>PJ: ${escapeHtml(project.name)}</option>`
-      ).join("")}
-    `;
   }
 
   function renderEntryFilterOptions(current) {

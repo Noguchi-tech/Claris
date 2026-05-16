@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/icon-180.png">
     <link rel="icon" href="icons/icon-192.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260516-claris7">
+    <link rel="stylesheet" href="styles.css?v=20260517-claris8">
     <title>Claris / クラリス</title>
   </head>
   <body>
@@ -20,6 +20,7 @@
           <span class="brand-mark" aria-hidden="true"><img src="icons/icon-192.png" alt=""></span>
           <div class="brand-copy">
             <span id="appName" class="app-name">Claris / クラリス</span>
+            <span id="headerDate" class="header-date" aria-label="今日の日付"></span>
             <h1 id="viewTitle">今日</h1>
           </div>
         </div>
@@ -36,7 +37,20 @@
           <span>カレンダー</span>
         </button>
         <button type="button" data-tab="today" class="today-tab" aria-label="今日">
-          <span class="nav-icon" aria-hidden="true">◎</span>
+          <span class="nav-icon claris-nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" focusable="false">
+              <defs>
+                <linearGradient id="tabClarisLine" x1="9" y1="7" x2="35" y2="40" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#ff6b4e"/>
+                  <stop offset="0.5" stop-color="#ee4aac"/>
+                  <stop offset="1" stop-color="#8d63f6"/>
+                </linearGradient>
+              </defs>
+              <path d="M32 13c-5-4-10-6-16-4C8 12 4 19 6 27c2 9 10 14 19 12 3-1 6-2 9-5" fill="none" stroke="url(#tabClarisLine)" stroke-width="4" stroke-linecap="round"/>
+              <path d="M21 21h10M21 26h8M21 31h5" fill="none" stroke="url(#tabClarisLine)" stroke-width="2.4" stroke-linecap="round"/>
+              <path d="M37 17c1 4 3 6 7 7-4 1-6 3-7 7-1-4-3-6-7-7 4-1 6-3 7-7z" fill="#ff8a4a"/>
+            </svg>
+          </span>
           <span>今日</span>
         </button>
         <button type="button" data-tab="entries" aria-label="一覧">
@@ -52,6 +66,6 @@
     <dialog id="conflictDialog" class="sheet-dialog conflict-dialog"></dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="app.js?v=20260516-claris7" defer></script>
+    <script src="app.js?v=20260517-claris8" defer></script>
   </body>
 </html>
