@@ -5,7 +5,7 @@
   const DB_VERSION = 1;
   const STORE = "app";
   const STATE_KEY = "state";
-  const BUNDLED_TASK_IMPORT_URL = "./data/current-todo-tasks-2026-05-16.json";
+  const BUNDLED_TASK_IMPORT_URL = "./data/claris-master-2026-05-17.json";
   const SINGLE_SLOT_PRIORITIES = ["P1", "P2", "P3"];
   const PERIOD_LINE_CLASS_COUNT = 6;
 
@@ -93,6 +93,7 @@
     document.body.addEventListener("click", handleClick);
     document.body.addEventListener("change", handleChange);
     document.body.addEventListener("input", handleInput);
+    document.body.addEventListener("keydown", handleKeydown);
     document.addEventListener("submit", handleSubmit);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") stopAudioCaptureImmediately();
@@ -289,6 +290,7 @@
     if (bottomNav) {
       const offsets = ["0px", "calc(100% + 4px)", "calc(200% + 8px)"];
       bottomNav.style.setProperty("--nav-offset", offsets[Math.max(navIndex, 0)] || offsets[1]);
+      bottomNav.classList.toggle("is-today-active", activeTab === "today");
     }
     document.querySelectorAll("[data-tab]").forEach((button) => {
       button.classList.toggle("is-active", button.dataset.tab === activeTab);
@@ -485,12 +487,39 @@
     ].filter(Boolean).join(" ");
     return `
       <button class="${classes}" type="button" data-action="select-day" data-date="${iso}">
-        <span class="day-number">${day.date.getDate()}</span>
+        <span class="day-head">
+          <span class="day-number">${day.date.getDate()}</span>
+          ${renderCalendarDayBadges(iso, dueTasks.length, filter)}
+        </span>
         ${renderDayPrioritySummary(actionTasks)}
-        ${renderCalendarDueLine(dueTasks.length)}
-        ${renderCalendarPeriodLines(iso, filter)}
       </button>
     `;
+  }
+
+  function renderCalendarDayBadges(isoDate, dueCount, filter) {
+    const periods = getCalendarPeriodsForDate(isoDate, filter).slice(0, 3);
+    const badges = [];
+    if (dueCount) {
+      badges.push(`<span class="day-badge day-badge-due" title="DL ${dueCount}件">DL${dueCount > 1 ? dueCount : ""}</span>`);
+    }
+    periods.forEach((period) => {
+      const classes = [
+        "day-badge",
+        "day-badge-period",
+        `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
+      ].join(" ");
+      badges.push(`<span class="${classes}" title="${escapeAttr(`${period.type}: ${period.title}`)}">${escapeHtml(compactPeriodType(period.type))}</span>`);
+    });
+    return badges.length ? `<span class="day-badge-stack" aria-label="日付の予定">${badges.join("")}</span>` : "";
+  }
+
+  function compactPeriodType(type) {
+    const text = String(type || "期");
+    if (/週/.test(text)) return "週";
+    if (/月/.test(text)) return "月";
+    if (/半期/.test(text)) return "半";
+    if (/プロジェクト|PJ/i.test(text)) return "PJ";
+    return truncate(text, 2);
   }
 
   function renderDayPrioritySummary(actionTasks) {
@@ -548,8 +577,9 @@
               "period-summary-item",
               `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
             ].join(" ");
+            const cardAction = period.source === "project" ? "edit-project-period" : "edit-policy";
             return `
-              <span class="${classes}">
+              <span class="${classes}" data-card-action="${cardAction}" data-id="${escapeAttr(period.id)}" tabindex="0">
                 <strong>${escapeHtml(period.type || "期間")}</strong>
                 <span>${escapeHtml(truncate(period.title, 18))}</span>
               </span>
@@ -574,14 +604,14 @@
     return `
       <section class="calendar-policy-focus" aria-label="選択日の方針">
         ${groups.map(([label, items]) => `
-          <div class="policy-focus-card">
+          <div class="policy-focus-card" data-card-action="edit-policy" data-id="${escapeAttr(items[0].id)}" tabindex="0">
             <span class="policy-focus-label">${label}</span>
             <strong>${escapeHtml(items[0].title)}</strong>
             ${items[0].policy ? `<span>${escapeHtml(truncate(items[0].policy, 46))}</span>` : ""}
           </div>
         `).join("")}
         ${other.slice(0, 2).map((policy) => `
-          <div class="policy-focus-card">
+          <div class="policy-focus-card" data-card-action="edit-policy" data-id="${escapeAttr(policy.id)}" tabindex="0">
             <span class="policy-focus-label">${escapeHtml(policy.type || "方針")}</span>
             <strong>${escapeHtml(policy.title)}</strong>
             ${policy.policy ? `<span>${escapeHtml(truncate(policy.policy, 46))}</span>` : ""}
@@ -725,7 +755,7 @@
     const recurrence = recurrenceLabel(task);
     const dateAttr = contextDate ? ` data-date="${escapeAttr(contextDate)}"` : "";
     return `
-      <article class="task-card ${completed ? "completed" : ""}">
+      <article class="task-card ${completed ? "completed" : ""}" data-card-action="edit-task" data-id="${escapeAttr(task.id)}" tabindex="0">
         <button class="complete-button ${completed ? "is-completed" : ""}" type="button" data-action="toggle-task" data-id="${escapeAttr(task.id)}"${dateAttr} aria-label="完了切替"></button>
         <div class="task-main">
           <div class="task-title-row">
@@ -759,7 +789,7 @@
     const recordings = memo.recordings || [];
     const previewText = getMemoPreviewText(memo);
     return `
-      <article class="memo-card">
+      <article class="memo-card" data-card-action="edit-memo" data-id="${escapeAttr(memo.id)}" tabindex="0">
         <div class="section-head">
           <h3><button class="title-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">${escapeHtml(memo.title || "メモ")}</button></h3>
           <span class="priority-pill ${(priorityMeta[memo.priority] || priorityMeta.NONE).className}">${(priorityMeta[memo.priority] || priorityMeta.NONE).label}</span>
@@ -794,7 +824,7 @@
   function renderPolicyCard(policy) {
     const department = findById(app.state.departments, policy.departmentId);
     return `
-      <article class="policy-card">
+      <article class="policy-card" data-card-action="edit-policy" data-id="${escapeAttr(policy.id)}" tabindex="0">
         <div class="section-head">
           <h3>${escapeHtml(policy.title)}</h3>
           <span class="status-pill">${escapeHtml(policy.type || "方針")}</span>
@@ -821,6 +851,8 @@
       render();
       return;
     }
+
+    if (activateCardFromEvent(event)) return;
 
     const button = event.target.closest("[data-action]");
     if (!button) return;
@@ -872,7 +904,47 @@
     if (action === "remove-settings-row") button.closest(".list-row")?.remove();
   }
 
+  function handleKeydown(event) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (activateCardFromEvent(event)) {
+      event.preventDefault();
+    }
+  }
+
+  function activateCardFromEvent(event) {
+    if (event.target.closest("button, a, input, textarea, select, label, audio, video")) return false;
+    const card = event.target.closest("[data-card-action]");
+    if (!card) return false;
+    return activateCard(card.dataset.cardAction, card.dataset.id);
+  }
+
+  function activateCard(action, id) {
+    if (action === "edit-task") {
+      const task = findById(app.state.tasks, id);
+      if (!task) return false;
+      openTaskForm(task);
+    } else if (action === "edit-memo") {
+      const memo = findById(app.state.memos, id);
+      if (!memo) return false;
+      openMemoForm(memo);
+    } else if (action === "edit-policy") {
+      const policy = findById(app.state.policies, id);
+      if (!policy) return false;
+      openPolicyForm(policy);
+    } else if (action === "edit-project-period") {
+      openSettings();
+      showToast("プロジェクト期間は設定で編集できます。");
+    } else {
+      return false;
+    }
+    return true;
+  }
+
   async function handleChange(event) {
+    if (event.target.id === "settingsImportFile") {
+      await readImportFile(event.target);
+      return;
+    }
     if (event.target.id === "taskRecurrenceType") {
       updateRecurrenceForm(event.target.closest("form"));
       return;
@@ -2171,9 +2243,13 @@
                 <button class="mini-button" type="button" data-action="export-master-json">マスター上書き用JSON</button>
               </div>
             </div>
-            <p class="body-preview">公開URLは誰でも閲覧できるため、ここから直接マスタを書き換えません。iPhoneで編集した内容はマスター上書き用JSONとして出力し、必要時にデータファイルへ反映します。</p>
+            <p class="body-preview">マスターJSONを選択または貼り付けると、この端末のローカルデータへ上書き反映できます。公開データファイル自体の更新は、ホスティング先へ配置し直します。</p>
+            <div class="file-import-row">
+              <label class="file-import-button" for="settingsImportFile">JSONファイルを選択</label>
+              <input id="settingsImportFile" type="file" accept=".json,.csv,.txt,application/json,text/plain,text/csv">
+            </div>
             <textarea id="settingsImportText" name="settingsImportText" placeholder="JSON / CSV / テキストを貼り付け"></textarea>
-            <button class="ghost-button" type="button" data-action="run-import">貼り付け内容を取り込む</button>
+            <button class="ghost-button" type="button" data-action="run-import">内容を取り込む</button>
           </section>
           <section class="settings-block">
             <div class="section-head">
@@ -2274,7 +2350,7 @@
   function openImportDialog() {
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader("貼り付け取り込み", "アプリ側のデータを読ませず、貼り付けた内容だけを追加します。")}
+        ${renderSheetHeader("貼り付け取り込み", "マスターJSONは上書き同期、それ以外のJSON / CSV / テキストは追加取り込みします。")}
         <form id="importForm" class="form-grid">
           <div class="field">
             <label for="importText">追加内容</label>
@@ -2310,6 +2386,24 @@
     showToast(`${result.tasks}件のタスク、${result.memos}件のメモ、${result.policies || 0}件の方針を取り込みました。`);
   }
 
+  async function readImportFile(input) {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const textarea = document.getElementById("settingsImportText");
+      if (textarea) {
+        textarea.value = text;
+        textarea.focus();
+      }
+      showToast(`${file.name}を読み込みました。内容を確認して取り込めます。`);
+    } catch (error) {
+      showToast(`ファイルの読み込みに失敗しました: ${error.message}`);
+    } finally {
+      input.value = "";
+    }
+  }
+
   async function applyBundledTaskImport() {
     try {
       const response = await fetch(BUNDLED_TASK_IMPORT_URL, { cache: "no-store" });
@@ -2343,8 +2437,21 @@
     if (!text) return { tasks: 0, memos: 0 };
     let imported = { tasks: [], memos: [], policies: [] };
     try {
-      if (/^[{[]/.test(text)) imported = importJson(text);
-      else if (looksLikeCsv(text)) imported = importCsv(text);
+      if (/^[{[]/.test(text)) {
+        const parsed = JSON.parse(text);
+        if (isFullSyncMasterPayload(parsed)) {
+          const importId = String(parsed.importId || `manual-${Date.now()}`);
+          replaceStateFromMasterPayload(parsed, importId);
+          app.state.settings.appliedTaskImportId = importId;
+          await saveState();
+          return {
+            tasks: app.state.tasks.length,
+            memos: app.state.memos.length,
+            policies: app.state.policies.length
+          };
+        }
+        imported = importJsonPayload(parsed);
+      } else if (looksLikeCsv(text)) imported = importCsv(text);
       else imported = importTodoText(text);
     } catch (error) {
       showToast(`取り込みに失敗しました: ${error.message}`);
@@ -2356,6 +2463,20 @@
     upsertPoliciesFromImport(imported.policies, now);
     await saveState();
     return { tasks: imported.tasks.length, memos: imported.memos.length, policies: imported.policies.length };
+  }
+
+  function isFullSyncMasterPayload(payload) {
+    return Boolean(
+      payload &&
+      !Array.isArray(payload) &&
+      payload.fullSync === true &&
+      (
+        Array.isArray(payload.tasks) ||
+        Array.isArray(payload.memos) ||
+        Array.isArray(payload.policies) ||
+        Array.isArray(payload.departments)
+      )
+    );
   }
 
   function replaceTasksFromImport(tasks, importId) {
@@ -2412,6 +2533,13 @@
       departments: app.state.departments,
       projects: app.state.projects
     };
+    if (payload.settings && typeof payload.settings === "object") {
+      app.state.settings = {
+        ...app.state.settings,
+        ...payload.settings,
+        appliedTaskImportId: importId
+      };
+    }
     app.state.tasks = Array.isArray(payload.tasks) ? payload.tasks.map(normalizeTask) : app.state.tasks;
     app.state.memos = Array.isArray(payload.memos) ? payload.memos.map(normalizeMemo) : app.state.memos;
     app.state.policies = Array.isArray(payload.policies) ? payload.policies : app.state.policies;
@@ -2433,7 +2561,10 @@
   }
 
   function importJson(text) {
-    const parsed = JSON.parse(text);
+    return importJsonPayload(JSON.parse(text));
+  }
+
+  function importJsonPayload(parsed) {
     const source = Array.isArray(parsed) ? { tasks: parsed } : parsed;
     return {
       tasks: (source.tasks || []).map((task) => ({
@@ -2994,6 +3125,7 @@
         start: policy.periodStart || policy.periodEnd,
         end: policy.periodEnd || policy.periodStart,
         type: policy.type || "方針",
+        source: "policy",
         departmentId: policy.departmentId || "",
         projectId: ""
       }));
@@ -3005,6 +3137,7 @@
         start: project.startDate || project.endDate,
         end: project.endDate || project.startDate,
         type: "プロジェクト",
+        source: "project",
         departmentId: project.departmentId || "",
         projectId: project.id
       }));
