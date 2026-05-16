@@ -1,5 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Claris">
-  <rect width="512" height="512" rx="112" fill="#ffffff"/>
-  <rect x="116" y="116" width="280" height="280" rx="62" fill="none" stroke="#171a1c" stroke-width="28"/>
-  <path d="M337 327c-29 28-66 42-111 42-42 0-78-15-107-44-29-30-44-66-44-110 0-43 15-80 44-109 29-30 65-45 108-45 45 0 82 14 110 42 11 10 11 28 0 39l-24 24c-10 10-26 10-37 1-13-11-29-17-49-17-21 0-39 7-53 22-14 14-21 33-21 57s7 43 22 58c14 14 32 22 53 22 19 0 35-6 48-17 11-9 27-9 37 1l24 24c11 11 11 29 0 40z" fill="#171a1c"/>
+  <defs>
+    <linearGradient id="clarisLine" x1="140" y1="90" x2="368" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff6b4e"/>
+      <stop offset="0.48" stop-color="#ee4aac"/>
+      <stop offset="1" stop-color="#8d63f6"/>
+    </linearGradient>
+    <linearGradient id="clarisSpark" x1="330" y1="202" x2="380" y2="250" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff6b4e"/>
+      <stop offset="1" stop-color="#ff9e4d"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="100" fill="#fffdf9"/>
+  <path d="M334 148c-33-32-79-51-128-51-94 0-171 76-171 170s77 169 171 169c47 0 90-18 122-47" fill="none" stroke="url(#clarisLine)" stroke-width="28" stroke-linecap="round"/>
+  <path d="M318 190c-28-26-67-42-110-42-65 0-121 39-146 95" fill="none" stroke="url(#clarisLine)" stroke-width="22" stroke-linecap="round" opacity=".9"/>
+  <path d="M208 256h88M208 288h68M208 320h42" fill="none" stroke="url(#clarisLine)" stroke-width="14" stroke-linecap="round"/>
+  <path d="M360 206c6 22 14 30 36 36-22 6-30 14-36 36-6-22-14-30-36-36 22-6 30-14 36-36z" fill="url(#clarisSpark)"/>
 </svg>

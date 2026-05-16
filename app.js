@@ -18,11 +18,19 @@
   };
 
   const tabs = {
-    today: "今日",
     calendar: "カレンダー",
-    tasks: "タスク",
-    memos: "メモ",
-    policies: "方針"
+    today: "今日",
+    entries: "一覧"
+  };
+  const legacyEntryTabs = new Set(["tasks", "memos", "policies"]);
+  const weekdayLabels = ["日", "月", "火", "水", "木", "金", "土"];
+  const recurrenceLabels = {
+    none: "なし",
+    weekly: "週次",
+    "monthly-day": "毎月日付",
+    "monthly-nth": "第n曜日",
+    "monthly-end": "月末",
+    custom: "カスタム"
   };
 
   const defaultDepartments = [
@@ -45,6 +53,7 @@
     recordingStartedAt: 0,
     recordingBaseText: "",
     recordingTranscript: "",
+    recordingInterimTranscript: "",
     recordingStream: null,
     pendingRecordings: [],
     pendingRecordingTranscript: "",
@@ -77,6 +86,10 @@
     document.body.addEventListener("change", handleChange);
     document.body.addEventListener("input", handleInput);
     document.addEventListener("submit", handleSubmit);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") stopAudioCaptureImmediately();
+    });
+    window.addEventListener("pagehide", stopAudioCaptureImmediately);
   }
 
   function openDatabase() {
@@ -189,9 +202,24 @@
       estimatedMinutes: Number(task.estimatedMinutes || 0),
       memoIds: Array.isArray(task.memoIds) ? task.memoIds : [],
       showLinkedMemos: task.showLinkedMemos !== false,
+      recurrence: normalizeRecurrence(task.recurrence),
+      completedDates: normalizeDateList(task.completedDates),
       createdAt: task.createdAt || nowIso(),
       updatedAt: task.updatedAt || nowIso(),
       completedAt: task.completedAt || null
+    };
+  }
+
+  function normalizeRecurrence(recurrence = {}) {
+    const type = recurrenceLabels[recurrence.type] ? recurrence.type : "none";
+    return {
+      type,
+      interval: clampNumber(recurrence.interval, 1, 24, 1),
+      weekdays: normalizeWeekdays(recurrence.weekdays),
+      monthDay: clampNumber(recurrence.monthDay, 1, 31, 1),
+      ordinal: clampNumber(recurrence.ordinal, 1, 5, 2),
+      weekday: clampNumber(recurrence.weekday, 0, 6, 0),
+      customDates: normalizeDateList(recurrence.customDates)
     };
   }
 
@@ -235,21 +263,25 @@
   }
 
   function render() {
-    const activeTab = app.state.ui.activeTab || "today";
+    const activeTab = normalizeActiveTab(app.state.ui.activeTab || "today");
+    app.state.ui.activeTab = activeTab;
     viewTitle.textContent = tabs[activeTab] || "今日";
     if (appName) appName.textContent = `Claris / クラリス　　${formatHeaderDate(todayIso())}`;
     renderNav(activeTab);
     if (activeTab === "calendar") renderCalendarView();
-    if (activeTab === "tasks") renderTasksView();
     if (activeTab === "today") renderTodayView();
-    if (activeTab === "memos") renderMemosView();
-    if (activeTab === "policies") renderPoliciesView();
+    if (activeTab === "entries") renderEntriesView();
   }
 
   function renderNav(activeTab) {
     document.querySelectorAll("[data-tab]").forEach((button) => {
       button.classList.toggle("is-active", button.dataset.tab === activeTab);
     });
+  }
+
+  function normalizeActiveTab(tab) {
+    if (legacyEntryTabs.has(tab)) return "entries";
+    return tabs[tab] ? tab : "today";
   }
 
   function buildHeaderAssigneeLabel() {
@@ -264,9 +296,9 @@
   function renderTodayView() {
     const date = todayIso();
     const activeTasks = app.state.tasks.filter((task) => task.status === "active");
-    const todayTasks = sortTasks(activeTasks.filter((task) => task.actionDate === date));
-    const overdue = sortTasks(activeTasks.filter((task) => task.dueDate && task.dueDate < date && task.actionDate !== date));
-    const completedToday = sortTasks(app.state.tasks.filter((task) => task.status === "completed" && task.completedAt?.startsWith(date)));
+    const todayTasks = sortTasks(activeTasks.filter((task) => taskOccursOnDate(task, date) && !isTaskCompletedForDate(task, date)));
+    const overdue = sortTasks(activeTasks.filter((task) => task.dueDate && task.dueDate < date && !taskOccursOnDate(task, date)));
+    const completedToday = sortTasks(app.state.tasks.filter((task) => isTaskCompletedForDate(task, date)));
     const relatedPolicies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
 
     view.innerHTML = `
@@ -280,7 +312,7 @@
       ${["P1", "P2", "P3", "SUB"].map((priority) => {
         const tasks = todayTasks.filter((task) => task.priority === priority);
         const emptyAction = priority === "SUB" ? "" : `<button class="mini-button" type="button" data-action="add-task-slot" data-priority="${priority}" data-date="${date}">この枠に追加</button>`;
-        return renderTaskSection(priorityMeta[priority].label, tasks, "空き", emptyAction);
+        return renderTaskSection(priorityMeta[priority].label, tasks, "空き", emptyAction, date);
       }).join("")}
       <section class="section">
         <div class="section-head">
@@ -291,7 +323,7 @@
           ${relatedPolicies.length ? relatedPolicies.map(renderPolicyCard).join("") : renderEmpty("今日の期間に入る方針はありません。", "方針を追加")}
         </div>
       </section>
-      ${app.state.settings.showCompleted ? renderTaskSection("今日完了", completedToday, "今日完了したタスクはありません") : ""}
+      ${app.state.settings.showCompleted ? renderTaskSection("今日完了", completedToday, "今日完了したタスクはありません", "", date) : ""}
     `;
   }
 
@@ -325,13 +357,52 @@
     `;
   }
 
+  function renderEntriesView() {
+    const activeTasks = sortTasksByActionDate(app.state.tasks.filter((task) => task.status === "active"));
+    const completed = sortTasksByActionDate(app.state.tasks.filter((task) => task.status === "completed"));
+    const memos = [...app.state.memos].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const policies = [...app.state.policies].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+
+    view.innerHTML = `
+      <section class="toolbar entries-toolbar">
+        <button class="mini-button" type="button" data-action="open-kind" data-kind="task">タスク</button>
+        <button class="mini-button" type="button" data-action="open-kind" data-kind="memo">メモ</button>
+        <button class="mini-button" type="button" data-action="open-kind" data-kind="policy">方針</button>
+      </section>
+      ${renderTaskSection("タスク", activeTasks, "タスクはまだありません。")}
+      ${app.state.settings.showCompleted ? renderTaskSection("完了済み", completed, "完了済みタスクはありません") : ""}
+      ${renderQuickCapture()}
+      <section class="section">
+        <div class="section-head">
+          <h2 class="section-title">メモ</h2>
+          <span class="section-count">${memos.length}件</span>
+        </div>
+        <div class="memo-list">
+          ${memos.length ? memos.map(renderMemoCard).join("") : renderEmpty("メモはまだありません。", "メモを追加")}
+        </div>
+      </section>
+      <section class="section">
+        <div class="section-head">
+          <h2 class="section-title">方針</h2>
+          <span class="section-count">${policies.length}件</span>
+        </div>
+        <div class="policy-list">
+          ${policies.length ? policies.map(renderPolicyCard).join("") : renderEmpty("方針はまだありません。", "方針を追加")}
+        </div>
+      </section>
+    `;
+    updateTranscriptPreview(getRecordingPreviewText());
+    updateRecordingButtons();
+  }
+
   function renderCalendarView() {
     const current = parseMonthKey(app.state.ui.calendarMonth || monthKey(new Date()));
     const selectedDate = app.state.ui.selectedDate || todayIso();
     const filter = app.state.ui.calendarFilter || "all";
     const days = buildCalendarDays(current.year, current.month);
     const selectedTasks = sortCalendarTasks(app.state.tasks.filter((task) =>
-      matchesCalendarTaskFilter(task, filter) && (task.actionDate === selectedDate || task.dueDate === selectedDate)
+      matchesCalendarTaskFilter(task, filter) &&
+      ((task.status === "active" && taskOccursOnDate(task, selectedDate)) || task.dueDate === selectedDate)
     ));
     const selectedPolicies = app.state.policies.filter((policy) =>
       matchesCalendarPolicyFilter(policy, filter) && isDateInPolicy(selectedDate, policy)
@@ -360,7 +431,7 @@
             <h2 class="section-title">${formatLongDate(selectedDate)}の予定</h2>
             <button class="mini-button" type="button" data-action="add-task-slot" data-priority="P2" data-date="${selectedDate}">追加</button>
           </div>
-          ${selectedTasks.length ? `<div class="task-list">${selectedTasks.map(renderTaskCard).join("")}</div>` : `<p class="body-preview">この日の作業またはDLタスクはありません。</p>`}
+          ${selectedTasks.length ? `<div class="task-list">${selectedTasks.map((task) => renderTaskCard(task, selectedDate)).join("")}</div>` : `<p class="body-preview">この日の作業またはDLタスクはありません。</p>`}
           ${selectedPolicies.length ? `<div class="policy-list">${selectedPolicies.map(renderPolicyCard).join("")}</div>` : ""}
         </div>
       </section>
@@ -370,7 +441,7 @@
   function renderDayCell(day, selectedDate, filter) {
     const iso = toDateInputValue(day.date);
     const actionTasks = app.state.tasks.filter((task) =>
-      task.status === "active" && task.actionDate === iso && matchesCalendarTaskFilter(task, filter)
+      task.status === "active" && taskOccursOnDate(task, iso) && !isTaskCompletedForDate(task, iso) && matchesCalendarTaskFilter(task, filter)
     );
     const dueTasks = app.state.tasks.filter((task) =>
       task.status === "active" && task.dueDate === iso && matchesCalendarTaskFilter(task, filter)
@@ -463,6 +534,23 @@
   function renderMemosView() {
     const memos = [...app.state.memos].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
     view.innerHTML = `
+      ${renderQuickCapture()}
+      <section class="section">
+        <div class="section-head">
+          <h2 class="section-title">メモ一覧</h2>
+          <span class="section-count">${memos.length}件</span>
+        </div>
+        <div class="memo-list">
+          ${memos.length ? memos.map(renderMemoCard).join("") : renderEmpty("メモはまだありません。", "メモを追加")}
+        </div>
+      </section>
+    `;
+    updateTranscriptPreview(getRecordingPreviewText());
+    updateRecordingButtons();
+  }
+
+  function renderQuickCapture() {
+    return `
       <section class="quick-capture">
         <div class="section-head">
           <h2 class="section-title">走り書きメモ</h2>
@@ -476,18 +564,7 @@
           <button class="ghost-button compact" type="button" data-action="stop-recording" disabled>停止</button>
         </div>
       </section>
-      <section class="section">
-        <div class="section-head">
-          <h2 class="section-title">メモ一覧</h2>
-          <span class="section-count">${memos.length}件</span>
-        </div>
-        <div class="memo-list">
-          ${memos.length ? memos.map(renderMemoCard).join("") : renderEmpty("メモはまだありません。", "メモを追加")}
-        </div>
-      </section>
     `;
-    updateTranscriptPreview(getRecordingPreviewText());
-    updateRecordingButtons();
   }
 
   function renderPoliciesView() {
@@ -514,7 +591,7 @@
     `;
   }
 
-  function renderTaskSection(title, tasks, emptyText, actionHtml = "") {
+  function renderTaskSection(title, tasks, emptyText, actionHtml = "", contextDate = "") {
     return `
       <section class="section">
         <div class="section-head">
@@ -522,7 +599,7 @@
           <span class="section-count">${tasks.length}件</span>
         </div>
         <div class="task-list">
-          ${tasks.length ? tasks.map(renderTaskCard).join("") : renderEmpty(emptyText, "", actionHtml)}
+          ${tasks.length ? tasks.map((task) => renderTaskCard(task, contextDate)).join("") : renderEmpty(emptyText, "", actionHtml)}
         </div>
       </section>
     `;
@@ -533,7 +610,7 @@
     return `<div class="empty-state"><p>${escapeHtml(text)}</p><div class="card-actions">${actionHtml}${addButton}</div></div>`;
   }
 
-  function renderTaskCard(task) {
+  function renderTaskCard(task, contextDate = "") {
     const priority = priorityMeta[task.priority] || priorityMeta.NONE;
     const department = findById(app.state.departments, task.departmentId);
     const project = findById(app.state.projects, task.projectId);
@@ -546,10 +623,12 @@
           </button>
         `).join("")}</div>`
       : "";
-    const completed = task.status === "completed";
+    const completed = isTaskCompletedForDate(task, contextDate);
+    const recurrence = recurrenceLabel(task);
+    const dateAttr = contextDate ? ` data-date="${escapeAttr(contextDate)}"` : "";
     return `
       <article class="task-card ${completed ? "completed" : ""}">
-        <button class="complete-button ${completed ? "is-completed" : ""}" type="button" data-action="toggle-task" data-id="${escapeAttr(task.id)}" aria-label="完了切替"></button>
+        <button class="complete-button ${completed ? "is-completed" : ""}" type="button" data-action="toggle-task" data-id="${escapeAttr(task.id)}"${dateAttr} aria-label="完了切替"></button>
         <div class="task-main">
           <div class="task-title-row">
             <h3 class="task-title"><button class="title-button" type="button" data-action="edit-task" data-id="${escapeAttr(task.id)}">${escapeHtml(task.title)}</button></h3>
@@ -562,6 +641,7 @@
             ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
             ${project ? `<span class="tag">${escapeHtml(project.name)}</span>` : ""}
             ${linkedMemos.length ? `<span class="tag">メモ ${linkedMemos.length}</span>` : ""}
+            ${recurrence ? `<span class="tag">${escapeHtml(recurrence)}</span>` : ""}
           </div>
           ${memoSummary}
           <div class="card-actions">
@@ -593,7 +673,7 @@
           ${linkedTasks.length ? `<span class="tag">関連タスク ${linkedTasks.length}</span>` : ""}
           ${recordings.length ? `<span class="tag">録音 ${recordings.length}</span>` : ""}
         </div>
-        ${previewText ? `<p class="body-preview">${escapeHtml(previewText)}</p>` : ""}
+        ${previewText ? `<button class="body-preview body-preview-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">${escapeHtml(previewText)}</button>` : ""}
         <div class="card-actions">
           <button class="mini-button" type="button" data-action="memo-to-task" data-id="${escapeAttr(memo.id)}">タスク化</button>
           <button class="mini-button" type="button" data-action="delete-memo" data-id="${escapeAttr(memo.id)}">削除</button>
@@ -638,7 +718,7 @@
   async function handleClick(event) {
     const tabButton = event.target.closest("[data-tab]");
     if (tabButton) {
-      app.state.ui.activeTab = tabButton.dataset.tab;
+      app.state.ui.activeTab = normalizeActiveTab(tabButton.dataset.tab);
       await saveState();
       render();
       return;
@@ -658,11 +738,15 @@
     if (action === "edit-task") openTaskForm(findById(app.state.tasks, id));
     if (action === "edit-memo") openMemoForm(findById(app.state.memos, id));
     if (action === "edit-policy") openPolicyForm(findById(app.state.policies, id));
-    if (action === "toggle-task") await toggleTask(id);
+    if (action === "toggle-task") await toggleTask(id, button.dataset.date || "");
     if (action === "move-today") await moveTaskToToday(id);
     if (action === "assign-today-priority") await assignTaskToToday(id, button.dataset.priority);
     if (action === "duplicate-task") await duplicateTask(id);
-    if (action === "delete-task") await deleteEntity("tasks", id, "タスクを削除しました");
+    if (action === "delete-task") openTaskDeleteConfirm(id);
+    if (action === "confirm-delete-task") {
+      closeDialogs();
+      await deleteEntity("tasks", id, "タスクを削除しました");
+    }
     if (action === "delete-memo") await deleteMemo(id);
     if (action === "delete-policy") await deleteEntity("policies", id, "方針を削除しました");
     if (action === "classify-memo-form") classifyMemoForm();
@@ -688,6 +772,18 @@
   }
 
   async function handleChange(event) {
+    if (event.target.id === "taskRecurrenceType") {
+      updateRecurrenceForm(event.target.closest("form"));
+      return;
+    }
+    if (event.target.id === "taskActionDate" || event.target.id === "taskPriority") {
+      updateTaskPriorityPreview(event.target.closest("form"));
+      return;
+    }
+    if (event.target.id === "conflictMoveDate" || event.target.id === "conflictMovePriority") {
+      updateConflictMovePreview();
+      return;
+    }
     if (event.target.id === "taskFilter") {
       app.state.ui.taskFilter = event.target.value;
       await saveState();
@@ -726,16 +822,21 @@
   }
 
   function openAddForCurrentContext() {
-    const activeTab = app.state.ui.activeTab || "today";
-    if (activeTab === "memos") {
-      openMemoForm();
-      return;
-    }
-    if (activeTab === "policies") {
-      openPolicyForm();
-      return;
-    }
-    openTaskForm(null, defaultTaskForCurrentContext());
+    openAddChoice(defaultAddKind());
+  }
+
+  function defaultAddKind() {
+    const activeTab = normalizeActiveTab(app.state.ui.activeTab || "today");
+    return activeTab === "entries" ? "task" : "task";
+  }
+
+  function openAddChoice(active = "task") {
+    openSheet(`
+      <div class="sheet sheet-compact">
+        ${renderSheetHeader("追加", "追加する内容を選んでください。")}
+        ${renderKindButtons(active)}
+      </div>
+    `);
   }
 
   function defaultTaskForCurrentContext() {
@@ -758,7 +859,8 @@
       projectId: existing?.projectId || "",
       estimatedMinutes: existing?.estimatedMinutes || "",
       memoIds: existing?.memoIds || [],
-      showLinkedMemos: existing?.showLinkedMemos !== false
+      showLinkedMemos: existing?.showLinkedMemos !== false,
+      recurrence: normalizeRecurrence(existing?.recurrence || defaults.recurrence || {})
     };
     openSheet(`
       <div class="sheet">
@@ -768,7 +870,7 @@
             <label for="taskTitle">タスク名</label>
             <input id="taskTitle" name="title" required value="${escapeAttr(value.title)}" autocomplete="off">
           </div>
-          <div class="field-inline">
+          <div class="field-inline task-date-row">
             <div class="field">
               <label for="taskActionDate">実施</label>
               <input id="taskActionDate" name="actionDate" type="date" value="${escapeAttr(value.actionDate)}">
@@ -777,12 +879,12 @@
               <label for="taskDueDate">DL</label>
               <input id="taskDueDate" name="dueDate" type="date" value="${escapeAttr(value.dueDate)}">
             </div>
+          </div>
+          <div class="field-inline">
             <div class="field">
               <label for="taskPriority">優先度</label>
               <select id="taskPriority" name="priority">${renderPriorityOptions(value.priority)}</select>
             </div>
-          </div>
-          <div class="field-inline">
             <div class="field">
               <label for="taskAssignee">担当者</label>
               <input id="taskAssignee" name="assignee" value="${escapeAttr(value.assignee)}" autocomplete="off" placeholder="任意">
@@ -800,6 +902,8 @@
               <input id="taskEstimate" name="estimatedMinutes" type="number" min="0" step="5" value="${escapeAttr(value.estimatedMinutes)}">
             </div>
           </div>
+          <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
+          ${renderRecurrenceFields(value.recurrence)}
           <div class="field">
             <label for="taskMemos">関連メモ</label>
             <select id="taskMemos" name="memoIds" multiple size="4">${renderMemoOptions(value.memoIds)}</select>
@@ -815,6 +919,8 @@
         </form>
       </div>
     `);
+    updateRecurrenceForm(document.getElementById("taskForm"));
+    updateTaskPriorityPreview(document.getElementById("taskForm"));
   }
 
   function openMemoForm(memo = null) {
@@ -986,9 +1092,7 @@
     const items = [
       ["task", "タスク", "実施とDL"],
       ["memo", "メモ", "走り書き"],
-      ["policy", "方針", "判断材料"],
-      ["project", "プロジェクト", "施策管理"],
-      ["department", "部門", "分類"]
+      ["policy", "方針", "判断材料"]
     ];
     return `
       <div class="choice-grid" aria-label="追加種別">
@@ -1000,6 +1104,114 @@
         `).join("")}
       </div>
     `;
+  }
+
+  function renderRecurrenceFields(recurrence) {
+    const value = normalizeRecurrence(recurrence);
+    return `
+      <section class="recurrence-panel">
+        <div class="field-inline recurrence-head">
+          <div class="field">
+            <label for="taskRecurrenceType">繰り返し</label>
+            <select id="taskRecurrenceType" name="recurrenceType">
+              ${Object.entries(recurrenceLabels).map(([type, label]) =>
+                `<option value="${type}"${selected(value.type, type)}>${label}</option>`
+              ).join("")}
+            </select>
+          </div>
+          <div class="field recurrence-section" data-recurrence-section="weekly monthly-day monthly-nth monthly-end custom">
+            <label for="taskRecurrenceInterval">間隔</label>
+            <input id="taskRecurrenceInterval" name="recurrenceInterval" type="number" min="1" max="24" step="1" value="${escapeAttr(value.interval)}">
+          </div>
+        </div>
+        <div class="recurrence-section recurrence-weekdays" data-recurrence-section="weekly">
+          ${weekdayLabels.map((label, index) => `
+            <label class="weekday-choice">
+              <input type="checkbox" name="recurrenceWeekdays" value="${index}" ${value.weekdays.includes(index) ? "checked" : ""}>
+              <span>${label}</span>
+            </label>
+          `).join("")}
+        </div>
+        <div class="field recurrence-section" data-recurrence-section="monthly-day">
+          <label for="taskRecurrenceMonthDay">毎月の日付</label>
+          <input id="taskRecurrenceMonthDay" name="recurrenceMonthDay" type="number" min="1" max="31" step="1" value="${escapeAttr(value.monthDay)}">
+        </div>
+        <div class="field-inline recurrence-section" data-recurrence-section="monthly-nth">
+          <div class="field">
+            <label for="taskRecurrenceOrdinal">第</label>
+            <select id="taskRecurrenceOrdinal" name="recurrenceOrdinal">
+              ${[1, 2, 3, 4, 5].map((ordinal) => `<option value="${ordinal}"${selected(value.ordinal, ordinal)}>${ordinal}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="taskRecurrenceWeekday">曜日</label>
+            <select id="taskRecurrenceWeekday" name="recurrenceWeekday">
+              ${weekdayLabels.map((label, index) => `<option value="${index}"${selected(value.weekday, index)}>${label}曜日</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="field recurrence-section" data-recurrence-section="custom">
+          <label for="taskRecurrenceCustomDates">カスタム日付</label>
+          <textarea id="taskRecurrenceCustomDates" name="recurrenceCustomDates" placeholder="2026-05-16&#10;2026-06-15">${escapeHtml(value.customDates.join("\n"))}</textarea>
+        </div>
+      </section>
+    `;
+  }
+
+  function updateRecurrenceForm(form) {
+    if (!form) return;
+    const type = form.elements.recurrenceType?.value || "none";
+    form.querySelectorAll("[data-recurrence-section]").forEach((section) => {
+      const visible = section.dataset.recurrenceSection.split(" ").includes(type);
+      section.classList.toggle("hidden", !visible);
+    });
+  }
+
+  function recurrenceFromForm(data) {
+    return normalizeRecurrence({
+      type: String(data.get("recurrenceType") || "none"),
+      interval: Number(data.get("recurrenceInterval") || 1),
+      weekdays: data.getAll("recurrenceWeekdays").map(Number),
+      monthDay: Number(data.get("recurrenceMonthDay") || 1),
+      ordinal: Number(data.get("recurrenceOrdinal") || 2),
+      weekday: Number(data.get("recurrenceWeekday") || 0),
+      customDates: String(data.get("recurrenceCustomDates") || "")
+        .split(/[\n,、\s]+/)
+        .map((date) => date.trim())
+        .filter(Boolean)
+    });
+  }
+
+  function updateTaskPriorityPreview(form) {
+    if (!form) return;
+    const target = form.querySelector("#priorityAvailability");
+    if (!target) return;
+    const date = String(form.elements.actionDate?.value || "");
+    const selectedPriority = String(form.elements.priority?.value || "");
+    const currentId = form.dataset.id || "";
+    target.innerHTML = renderPriorityAvailability(date, currentId, selectedPriority);
+  }
+
+  function renderPriorityAvailability(date, excludeId = "", selectedPriority = "", extraExcludeIds = []) {
+    if (!date) {
+      return `<span class="availability-note">実施日を選ぶと、その日の優先度の空き状況を表示します。</span>`;
+    }
+    const excludeIds = [excludeId].concat(extraExcludeIds).filter(Boolean);
+    const rows = ["P1", "P2", "P3", "SUB"].map((priority) => {
+      const occupants = getPriorityOccupants(date, priority, excludeIds);
+      const occupied = occupants.length && priority !== "SUB";
+      const classes = [
+        "availability-pill",
+        occupied ? "is-occupied" : "is-open",
+        selectedPriority === priority ? "is-selected" : ""
+      ].filter(Boolean).join(" ");
+      const label = priorityMeta[priority].label;
+      const detail = priority === "SUB"
+        ? `${occupants.length}件`
+        : (occupied ? truncate(occupants[0].title || "登録済み", 16) : "空き");
+      return `<span class="${classes}"><strong>${label}</strong><small>${escapeHtml(detail)}</small></span>`;
+    }).join("");
+    return `<div class="availability-row">${rows}</div>`;
   }
 
   async function handleTaskSubmit(form) {
@@ -1021,6 +1233,8 @@
       estimatedMinutes: Number(data.get("estimatedMinutes") || 0),
       memoIds: data.getAll("memoIds").map(String),
       showLinkedMemos: data.get("showLinkedMemos") === "on",
+      recurrence: recurrenceFromForm(data),
+      completedDates: existing?.completedDates || [],
       createdAt: existing?.createdAt || now,
       updatedAt: now,
       status: existing?.status || "active",
@@ -1042,7 +1256,8 @@
     }
 
     if (mode && conflicts.length) {
-      applyConflictMode(task, conflicts, context, mode);
+      const resolved = applyConflictMode(task, conflicts, context, mode);
+      if (!resolved) return;
     }
     upsertById(app.state.tasks, task);
     syncMemoLinksForTask(task);
@@ -1053,17 +1268,18 @@
 
   function openConflictDialog(task, conflicts) {
     const existingLabel = conflicts.length > 1 ? `既存 ${conflicts.length}件` : "既存";
+    const availablePriority = findAvailablePriority(task.actionDate, task.id, [task.priority]);
     conflictDialog.innerHTML = `
       <div class="sheet">
-        ${renderSheetHeader("優先度枠が重複しています", `${formatShortDate(task.actionDate)} の ${priorityMeta[task.priority].label} には既存タスクがあります。`)}
+        ${renderSheetHeader("優先度の入れ替え", `${formatShortDate(task.actionDate)} の ${priorityMeta[task.priority].label} には既存タスクがあります。`)}
         <div class="conflict-compare">
           <section class="conflict-panel conflict-new">
-            <span class="conflict-label">新規 / 編集中</span>
+            <span class="conflict-label">入れたいタスク</span>
             <strong>${escapeHtml(task.title)}</strong>
             <span>${formatConflictSlot(task)}</span>
           </section>
           <section class="conflict-panel conflict-existing">
-            <span class="conflict-label">${existingLabel}</span>
+            <span class="conflict-label">${existingLabel}タスク</span>
             ${conflicts.map((item) => `
               <div class="conflict-existing-item">
                 <strong>${escapeHtml(item.title)}</strong>
@@ -1072,41 +1288,72 @@
             `).join("")}
           </section>
         </div>
-        <div class="choice-grid">
-          <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="swap">
-            <strong>入れ替える</strong><span>新規/編集タスクをこの枠へ、既存を編集前の枠へ</span>
+        <div class="conflict-actions">
+          <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="new-available">
+            <strong>新規を空き枠へ</strong>
+            <span>${priorityMeta[availablePriority].label} に新規タスクを保存する</span>
           </button>
-          <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="restore">
-            <strong>枠を元に戻す</strong><span>新規/編集タスクを編集前の枠に戻す</span>
-          </button>
-          <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="existing-available">
-            <strong>既存を空き枠へ</strong><span>新規/編集タスクをこの枠に入れる</span>
-          </button>
-          <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="available">
-            <strong>新規を空き枠へ</strong><span>新規/編集タスク側の優先度を空き枠へ</span>
-          </button>
-          <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="existing-sub">
-            <strong>既存をサブタスクへ</strong><span>既存をサブに下げ、新規/編集タスクをこの枠へ</span>
-          </button>
-          <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="keep">
-            <strong>同じ枠へ追加</strong><span>警告を無視して保存</span>
-          </button>
+          <section class="conflict-move-box">
+            <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="move-existing">
+              <strong>既存を移動して入れる</strong>
+              <span>既存タスクを下の移動先へ移し、新規タスクを選択中の枠へ入れる</span>
+            </button>
+            <div class="field-inline task-date-row">
+              <div class="field">
+                <label for="conflictMoveDate">既存の移動日</label>
+                <input id="conflictMoveDate" type="date" value="${escapeAttr(task.actionDate)}">
+              </div>
+              <div class="field">
+                <label for="conflictMovePriority">移動先優先度</label>
+                <select id="conflictMovePriority">
+                  ${["P1", "P2", "P3", "SUB"].map((priority) => `<option value="${priority}"${selected(priority, availablePriority)}>${priorityMeta[priority].label}</option>`).join("")}
+                </select>
+              </div>
+            </div>
+            <div id="conflictMoveAvailability" class="priority-availability"></div>
+          </section>
           <button class="choice-button" type="button" data-action="back-to-task-form">
-            <strong>戻って修正</strong><span>日付や優先度を選び直す</span>
+            <strong>戻って修正</strong>
+            <span>日付や優先度を自分で選び直す</span>
           </button>
         </div>
       </div>
     `;
     conflictDialog.showModal();
+    updateConflictMovePreview();
   }
 
   async function resolveConflict(mode) {
     if (!app.pendingConflict) return;
     const { task, context } = app.pendingConflict;
     const conflicts = findPriorityConflicts(task);
+    if (mode === "move-existing") {
+      const moveDate = document.getElementById("conflictMoveDate")?.value || "";
+      const movePriority = document.getElementById("conflictMovePriority")?.value || "";
+      if (!moveDate || !priorityMeta[movePriority]) {
+        showToast("既存タスクの移動日と優先度を選んでください。");
+        return;
+      }
+      const blocked = movePriority !== "SUB" && getPriorityOccupants(moveDate, movePriority, conflicts.map((item) => item.id).concat(task.id)).length;
+      if (blocked) {
+        showToast("移動先の優先度は埋まっています。別の日付か優先度を選んでください。");
+        return;
+      }
+      context.moveDate = moveDate;
+      context.movePriority = movePriority;
+    }
     app.pendingConflict = null;
     closeDialogs();
-    await saveTaskWithConflict(task, context, mode || "keep");
+    await saveTaskWithConflict(task, context, mode || "new-available");
+  }
+
+  function updateConflictMovePreview() {
+    if (!conflictDialog.open || !app.pendingConflict) return;
+    const target = document.getElementById("conflictMoveAvailability");
+    const date = document.getElementById("conflictMoveDate")?.value || "";
+    const priority = document.getElementById("conflictMovePriority")?.value || "";
+    const excludeIds = app.pendingConflict.conflicts.map((item) => item.id).concat(app.pendingConflict.task.id);
+    if (target) target.innerHTML = renderPriorityAvailability(date, "", priority, excludeIds);
   }
 
   function reopenPendingTaskForm() {
@@ -1124,53 +1371,45 @@
   }
 
   function applyConflictMode(task, conflicts, context, mode) {
-    if (mode === "existing-sub") {
+    if (mode === "new-available") {
+      task.priority = findAvailablePriority(task.actionDate, task.id, [task.priority]);
+      return true;
+    }
+    if (mode === "move-existing") {
       conflicts.forEach((existing) => {
-        existing.priority = "SUB";
+        existing.actionDate = context.moveDate;
+        existing.priority = context.movePriority;
         existing.updatedAt = nowIso();
       });
+      return true;
     }
-    if (mode === "swap") {
-      conflicts.forEach((existing) => {
-        existing.actionDate = context.originalActionDate || "";
-        existing.priority = context.originalPriority || "NONE";
-        existing.updatedAt = nowIso();
-      });
-    }
-    if (mode === "restore") {
-      task.actionDate = context.originalActionDate || "";
-      task.priority = context.originalPriority || "NONE";
-    }
-    if (mode === "existing-available") {
-      conflicts.forEach((existing) => {
-        existing.priority = findAvailablePriority(existing.actionDate, existing.id, [task.priority]);
-        existing.updatedAt = nowIso();
-      });
-    }
-    if (mode === "available") {
-      task.priority = findAvailablePriority(task.actionDate, task.id);
-    }
+    return false;
   }
 
   function findPriorityConflicts(task) {
     if (!task.actionDate || !SINGLE_SLOT_PRIORITIES.includes(task.priority) || task.status !== "active") return [];
-    return app.state.tasks.filter((item) =>
-      item.id !== task.id &&
-      item.status === "active" &&
-      item.actionDate === task.actionDate &&
-      item.priority === task.priority
-    );
+    return getPriorityOccupants(task.actionDate, task.priority, [task.id]);
   }
 
   function findAvailablePriority(actionDate, excludeId, extraUsed = []) {
     const used = new Set(app.state.tasks.filter((task) =>
       task.id !== excludeId &&
       task.status === "active" &&
-      task.actionDate === actionDate &&
+      taskOccursOnDate(task, actionDate) &&
       SINGLE_SLOT_PRIORITIES.includes(task.priority)
     ).map((task) => task.priority));
     extraUsed.forEach((priority) => used.add(priority));
     return SINGLE_SLOT_PRIORITIES.find((priority) => !used.has(priority)) || "SUB";
+  }
+
+  function getPriorityOccupants(actionDate, priority, excludeIds = []) {
+    const excluded = new Set(excludeIds.filter(Boolean));
+    return app.state.tasks.filter((task) =>
+      !excluded.has(task.id) &&
+      task.status === "active" &&
+      task.priority === priority &&
+      taskOccursOnDate(task, actionDate)
+    );
   }
 
   async function handleMemoSubmit(form) {
@@ -1233,9 +1472,19 @@
     showToast("方針を保存しました。");
   }
 
-  async function toggleTask(id) {
+  async function toggleTask(id, date = "") {
     const task = findById(app.state.tasks, id);
     if (!task) return;
+    if (hasRecurrence(task) && date && taskOccursOnDate(task, date)) {
+      const dates = new Set(task.completedDates || []);
+      if (dates.has(date)) dates.delete(date);
+      else dates.add(date);
+      task.completedDates = [...dates].sort();
+      task.updatedAt = nowIso();
+      await saveState();
+      render();
+      return;
+    }
     if (task.status === "completed") {
       task.status = "active";
       task.completedAt = null;
@@ -1246,6 +1495,21 @@
     task.updatedAt = nowIso();
     await saveState();
     render();
+  }
+
+  function openTaskDeleteConfirm(id) {
+    const task = findById(app.state.tasks, id);
+    if (!task) return;
+    openSheet(`
+      <div class="sheet sheet-compact">
+        ${renderSheetHeader("タスク削除", "このタスクを削除します。削除済みから戻すことはできます。")}
+        <p class="body-preview">${escapeHtml(task.title || "タスク")}</p>
+        <div class="form-actions">
+          <button class="text-button" type="button" data-action="close-dialog">キャンセル</button>
+          <button class="danger-button" type="button" data-action="confirm-delete-task" data-id="${escapeAttr(id)}">削除</button>
+        </div>
+      </div>
+    `);
   }
 
   async function moveTaskToToday(id) {
@@ -1471,6 +1735,7 @@
       const textarea = document.getElementById("quickMemoText");
       app.recordingBaseText = textarea?.value.trim() || "";
       app.recordingTranscript = "";
+      app.recordingInterimTranscript = "";
       updateTranscriptPreview(getRecordingPreviewText());
       app.mediaRecorder.addEventListener("dataavailable", (event) => {
         if (event.data.size) app.recordingChunks.push(event.data);
@@ -1488,7 +1753,7 @@
   }
 
   async function stopRecording() {
-    stopTranscription({ abort: true });
+    stopTranscription();
     if (app.mediaRecorder && app.mediaRecorder.state !== "inactive") {
       try {
         app.mediaRecorder.requestData?.();
@@ -1514,7 +1779,7 @@
     await wait(300);
     const mimeType = app.mediaRecorder?.mimeType || "audio/webm";
     const blob = new Blob(app.recordingChunks, { type: mimeType });
-    const transcript = app.recordingTranscript.trim();
+    const transcript = appendText(app.recordingTranscript, app.recordingInterimTranscript).trim();
     const durationSeconds = Math.round((Date.now() - app.recordingStartedAt) / 1000);
     if (blob.size) {
       app.pendingRecordings.push({
@@ -1535,6 +1800,7 @@
     app.recordingStartedAt = 0;
     app.recordingBaseText = "";
     app.recordingTranscript = "";
+    app.recordingInterimTranscript = "";
     updateTranscriptPreview(getRecordingPreviewText());
     updateRecordingButtons(app.pendingRecordings.length ? "録音停止済み（保存待ち）" : "");
     app.recordingStopResolve?.();
@@ -1566,10 +1832,15 @@
       if (finalText && textarea) {
         if (options.recording) {
           app.recordingTranscript = appendText(app.recordingTranscript, finalText);
+          app.recordingInterimTranscript = "";
           updateTranscriptPreview(getRecordingPreviewText());
         } else {
           textarea.value = `${textarea.value}${textarea.value ? "\n" : ""}${finalText}`;
         }
+      }
+      if (options.recording) {
+        app.recordingInterimTranscript = interimText.trim();
+        updateTranscriptPreview(getRecordingPreviewText());
       }
       updateRecordingButtons(options.recording
         ? (interimText ? `録音中: ${interimText}` : "録音中 / 文字起こし中")
@@ -1629,6 +1900,17 @@
     app.recordingStream = null;
   }
 
+  function stopAudioCaptureImmediately() {
+    if (app.recognition) stopTranscription({ abort: true });
+    if (app.mediaRecorder && app.mediaRecorder.state !== "inactive") {
+      try {
+        app.mediaRecorder.requestData?.();
+        app.mediaRecorder.stop();
+      } catch {}
+    }
+    stopRecordingStream();
+  }
+
   function appendText(base, addition) {
     const left = String(base || "").trim();
     const right = String(addition || "").trim();
@@ -1638,7 +1920,7 @@
   }
 
   function getRecordingPreviewText() {
-    return appendText(app.pendingRecordingTranscript, app.recordingTranscript);
+    return appendText(appendText(app.pendingRecordingTranscript, app.recordingTranscript), app.recordingInterimTranscript);
   }
 
   function getMemoPreviewText(memo) {
@@ -2192,7 +2474,9 @@
 
   function renderTaskPicker(currentIds) {
     const current = new Set(currentIds || []);
-    const tasks = sortTasksByActionDate(app.state.tasks);
+    const tasks = sortTasksByActionDate(app.state.tasks).sort((a, b) =>
+      Number(current.has(b.id)) - Number(current.has(a.id))
+    );
     return `
       <div class="task-picker">
         <input id="memoTaskSearch" type="search" data-task-search placeholder="タスク名で検索（ひらがな/カタカナ対応）" autocomplete="off">
@@ -2204,10 +2488,11 @@
               task.assignee ? `担当 ${task.assignee}` : ""
             ].filter(Boolean).join(" / ");
             return `
-              <label class="task-picker-item" data-search-text="${escapeAttr(normalizeSearchText(`${task.title} ${meta}`))}">
+              <label class="task-picker-item ${current.has(task.id) ? "is-linked" : ""}" data-search-text="${escapeAttr(normalizeSearchText(`${task.title} ${meta}`))}">
                 <input type="checkbox" name="taskIds" value="${escapeAttr(task.id)}"${current.has(task.id) ? " checked" : ""}>
                 <span>
                   <strong>${escapeHtml(task.title)}</strong>
+                  ${current.has(task.id) ? `<small>現在紐付け中</small>` : ""}
                   ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
                 </span>
               </label>
@@ -2254,6 +2539,72 @@
     return sortTasksByActionDate(tasks).sort((a, b) =>
       Number(Boolean(b.dueDate)) - Number(Boolean(a.dueDate))
     );
+  }
+
+  function hasRecurrence(task) {
+    return task?.recurrence?.type && task.recurrence.type !== "none";
+  }
+
+  function taskOccursOnDate(task, date) {
+    if (task.actionDate === date) return true;
+    if (!hasRecurrence(task)) return false;
+    return recurrenceMatchesDate(task, date);
+  }
+
+  function isTaskCompletedForDate(task, date = "") {
+    if (hasRecurrence(task) && date && taskOccursOnDate(task, date)) {
+      return (task.completedDates || []).includes(date);
+    }
+    if (task.status !== "completed") return false;
+    if (!date) return true;
+    return task.completedAt?.startsWith(date) || task.actionDate === date;
+  }
+
+  function recurrenceMatchesDate(task, date) {
+    const recurrence = normalizeRecurrence(task.recurrence);
+    if (recurrence.type === "none") return false;
+    if (recurrence.type === "custom") return recurrence.customDates.includes(date);
+
+    const start = task.actionDate || task.createdAt?.slice(0, 10) || todayIso();
+    if (!isIsoDate(start) || !isIsoDate(date) || date < start) return false;
+    const target = dateObject(date);
+    const startDate = dateObject(start);
+
+    if (recurrence.type === "weekly") {
+      const weekdays = recurrence.weekdays.length ? recurrence.weekdays : [startDate.getDay()];
+      if (!weekdays.includes(target.getDay())) return false;
+      return Math.floor(daysBetween(start, date) / 7) % recurrence.interval === 0;
+    }
+
+    const monthDistance = monthsBetween(start, date);
+    if (monthDistance % recurrence.interval !== 0) return false;
+
+    if (recurrence.type === "monthly-day") {
+      return target.getDate() === recurrence.monthDay;
+    }
+    if (recurrence.type === "monthly-end") {
+      return target.getDate() === lastDayOfMonth(target.getFullYear(), target.getMonth());
+    }
+    if (recurrence.type === "monthly-nth") {
+      return target.getDay() === recurrence.weekday && nthWeekdayOfMonth(target) === recurrence.ordinal;
+    }
+    return false;
+  }
+
+  function recurrenceLabel(task) {
+    if (!hasRecurrence(task)) return "";
+    const recurrence = normalizeRecurrence(task.recurrence);
+    if (recurrence.type === "weekly") {
+      const days = (recurrence.weekdays.length ? recurrence.weekdays : [dateObject(task.actionDate || todayIso()).getDay()])
+        .map((day) => weekdayLabels[day])
+        .join("");
+      return `${recurrence.interval > 1 ? `${recurrence.interval}週ごと ` : ""}${days}曜`;
+    }
+    if (recurrence.type === "monthly-day") return `毎月${recurrence.monthDay}日`;
+    if (recurrence.type === "monthly-end") return "毎月月末";
+    if (recurrence.type === "monthly-nth") return `毎月第${recurrence.ordinal}${weekdayLabels[recurrence.weekday]}曜`;
+    if (recurrence.type === "custom") return `カスタム${recurrence.customDates.length}日`;
+    return recurrenceLabels[recurrence.type] || "";
   }
 
   function getLinkedMemos(task) {
@@ -2435,6 +2786,53 @@
     const date = isoDate ? new Date(`${isoDate}T00:00:00`) : new Date();
     date.setDate(date.getDate() + amount);
     return toDateInputValue(date);
+  }
+
+  function isIsoDate(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+  }
+
+  function dateObject(isoDate) {
+    return new Date(`${isoDate}T00:00:00`);
+  }
+
+  function daysBetween(start, end) {
+    return Math.floor((dateObject(end) - dateObject(start)) / 86400000);
+  }
+
+  function monthsBetween(start, end) {
+    const a = dateObject(start);
+    const b = dateObject(end);
+    return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  }
+
+  function lastDayOfMonth(year, month) {
+    return new Date(year, month + 1, 0).getDate();
+  }
+
+  function nthWeekdayOfMonth(date) {
+    return Math.floor((date.getDate() - 1) / 7) + 1;
+  }
+
+  function clampNumber(value, min, max, fallback) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(number)));
+  }
+
+  function normalizeWeekdays(values) {
+    return [...new Set((Array.isArray(values) ? values : [])
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value >= 0 && value <= 6))]
+      .sort((a, b) => a - b);
+  }
+
+  function normalizeDateList(values) {
+    return [...new Set((Array.isArray(values) ? values : [])
+      .map(String)
+      .map((value) => value.trim())
+      .filter(isIsoDate))]
+      .sort();
   }
 
   function nowIso() {

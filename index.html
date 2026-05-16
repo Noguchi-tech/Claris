@@ -9,15 +9,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/icon-180.png">
-    <link rel="icon" href="icons/claris-icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css?v=20260516-claris5">
+    <link rel="icon" href="icons/icon-192.png" type="image/png">
+    <link rel="stylesheet" href="styles.css?v=20260516-claris6">
     <title>Claris / クラリス</title>
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true"><span>C</span></span>
+          <span class="brand-mark" aria-hidden="true"><img src="icons/icon-192.png" alt=""></span>
           <div class="brand-copy">
             <span id="appName" class="app-name">Claris / クラリス</span>
             <h1 id="viewTitle">今日</h1>
@@ -35,21 +35,13 @@
           <span class="nav-icon" aria-hidden="true">□</span>
           <span>カレンダー</span>
         </button>
-        <button type="button" data-tab="tasks" aria-label="タスク">
-          <span class="nav-icon" aria-hidden="true">≡</span>
-          <span>タスク</span>
-        </button>
         <button type="button" data-tab="today" class="today-tab" aria-label="今日">
           <span class="nav-icon" aria-hidden="true">◎</span>
           <span>今日</span>
         </button>
-        <button type="button" data-tab="memos" aria-label="メモ">
-          <span class="nav-icon" aria-hidden="true">✎</span>
-          <span>メモ</span>
-        </button>
-        <button type="button" data-tab="policies" aria-label="方針">
-          <span class="nav-icon" aria-hidden="true">◇</span>
-          <span>方針</span>
+        <button type="button" data-tab="entries" aria-label="一覧">
+          <span class="nav-icon" aria-hidden="true">≡</span>
+          <span>一覧</span>
         </button>
       </nav>
 
@@ -60,6 +52,6 @@
     <dialog id="conflictDialog" class="sheet-dialog conflict-dialog"></dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="app.js?v=20260516-claris5" defer></script>
+    <script src="app.js?v=20260516-claris6" defer></script>
   </body>
 </html>
