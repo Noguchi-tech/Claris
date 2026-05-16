@@ -498,8 +498,7 @@
     const tokens = [
       ["P1", "最"],
       ["P2", "2"],
-      ["P3", "3"],
-      ["SUB", "サ"]
+      ["P3", "3"]
     ];
     return `
       <span class="day-priority-row" aria-label="作業優先度">

@@ -873,7 +873,7 @@ audio {
 .day-priority-row {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
   color: inherit;
   font-size: 10px;
@@ -884,7 +884,7 @@ audio {
 .day-priority-token {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 18px;
+  min-height: 17px;
   display: grid;
   place-items: center;
   border: 1px solid rgba(23, 33, 31, 0.1);
