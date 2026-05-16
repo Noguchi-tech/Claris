@@ -943,7 +943,6 @@
     if (action === "open-settings") openSettings();
     if (action === "quick-import") openImportDialog();
     if (action === "close-dialog") closeDialogs();
-    if (action === "clear-task-action-date") clearTaskActionDate(button);
     if (action === "open-kind") openKind(button.dataset.kind);
     if (action === "set-entry-kind") await setEntryKind(button.dataset.kind);
     if (action === "open-today-summary") openTodaySummaryDialog(button.dataset.summary);
@@ -1109,15 +1108,6 @@
     updateTaskPriorityPreview(form);
   }
 
-  function clearTaskActionDate(button) {
-    const form = button.closest("form");
-    const input = form?.elements.actionDate;
-    if (!input) return;
-    input.value = "";
-    updateTaskPriorityPreview(form);
-    input.focus();
-  }
-
   function openAddForCurrentContext() {
     openAddChoice(defaultAddKind());
   }
@@ -1170,10 +1160,7 @@
           <div class="field-inline task-date-row">
             <div class="field">
               <label for="taskActionDate">実施</label>
-              <div class="date-control">
-                <input id="taskActionDate" name="actionDate" type="date" value="${escapeAttr(value.actionDate)}">
-                <button class="mini-button date-reset-button" type="button" data-action="clear-task-action-date">リセット</button>
-              </div>
+              <input id="taskActionDate" name="actionDate" type="date" value="${escapeAttr(value.actionDate)}">
             </div>
             <div class="field">
               <label for="taskDueDate">DL</label>

@@ -513,18 +513,6 @@ input[type="checkbox"] {
   grid-template-columns: 1fr;
 }
 
-.date-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
-  align-items: center;
-}
-
-.date-reset-button {
-  min-height: 42px;
-  padding-inline: 9px;
-}
-
 label {
   color: var(--muted);
   font-size: 12px;
@@ -876,7 +864,7 @@ audio {
   text-align: left;
   display: grid;
   align-content: start;
-  gap: 5px;
+  gap: 4px;
   overflow: hidden;
 }
 
@@ -908,10 +896,8 @@ audio {
 
 .day-head {
   min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 4px;
+  display: grid;
+  gap: 3px;
 }
 
 .day-number {
@@ -933,7 +919,7 @@ audio {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 2px;
 }
 
@@ -961,24 +947,23 @@ audio {
 }
 
 .day-priority-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 1px;
   width: 100%;
   color: inherit;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 900;
   line-height: 1;
 }
 
 .day-priority-token {
-  width: 20px;
-  min-width: 20px;
-  height: 20px;
+  width: 13px;
+  min-width: 13px;
+  height: 13px;
   display: grid;
   place-content: center;
-  justify-self: center;
   border: 1px solid rgba(23, 33, 31, 0.1);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.5);
@@ -1749,13 +1734,26 @@ audio {
     padding: 4px;
   }
 
+  .day-number {
+    font-size: 16px;
+  }
+
+  .day-badge {
+    min-width: 14px;
+    min-height: 14px;
+    padding: 0 3px;
+    font-size: 8px;
+  }
+
   .day-priority-row {
-    font-size: 10px;
-    gap: 2px;
+    font-size: 8px;
+    gap: 1px;
   }
 
   .day-priority-token {
-    min-height: 16px;
+    width: 11px;
+    min-width: 11px;
+    height: 11px;
   }
 
   .bottom-nav {
