@@ -8,6 +8,7 @@
   const BUNDLED_TASK_IMPORT_URL = "./data/claris-master-2026-05-17.json";
   const SINGLE_SLOT_PRIORITIES = ["P1", "P2", "P3"];
   const PERIOD_LINE_CLASS_COUNT = 6;
+  const CLASSIFICATION_LABEL = "分類";
 
   const priorityMeta = {
     P1: { label: "最優先", className: "priority-p1" },
@@ -39,16 +40,26 @@
     custom: "カスタム"
   };
 
+  // `departmentId` is kept as the durable storage key. The user-facing label is "分類".
   const defaultDepartments = [
-    ["dept_store", "店舗全体", ""],
+    ["dept_store", "庶務", ""],
     ["dept_food", "食品", ""],
     ["dept_clothing", "衣服", ""],
-    ["dept_life", "生活", ""],
+    ["dept_life", "H＆B", ""],
+    ["dept_houseware", "ハウス", ""],
+    ["dept_kitchen", "ステー", ""],
     ["dept_large", "大型", ""],
-    ["dept_kitchen", "キッチン", "dept_life"],
-    ["dept_houseware", "ハウスウェア", "dept_life"],
     ["dept_other", "その他", ""]
   ];
+  const defaultDepartmentNamesById = new Map(defaultDepartments.map(([id, name]) => [id, name]));
+  const defaultDepartmentOrderById = new Map(defaultDepartments.map(([id], index) => [id, index + 1]));
+  const legacyDefaultDepartmentNamesById = new Map([
+    ["dept_store", "店舗全体"],
+    ["dept_life", "生活"],
+    ["dept_kitchen", "キッチン"],
+    ["dept_houseware", "ハウスウェア"]
+  ]);
+  const legacyDefaultDepartmentIdsByName = new Map([...legacyDefaultDepartmentNamesById].map(([id, name]) => [name, id]));
 
   const app = {
     state: null,
@@ -85,6 +96,7 @@
     app.db = await openDatabase();
     app.state = await loadState();
     await applyBundledTaskImport();
+    applyStartupUiPolicy();
     render();
     registerServiceWorker();
   }
@@ -134,6 +146,12 @@
     const saved = await dbGet(STATE_KEY);
     if (!saved) return createDefaultState();
     return normalizeState(saved);
+  }
+
+  function applyStartupUiPolicy() {
+    app.state.ui.activeTab = "today";
+    if (!app.state.ui.selectedDate) app.state.ui.selectedDate = todayIso();
+    if (!app.state.ui.calendarMonth) app.state.ui.calendarMonth = monthKey(new Date());
   }
 
   async function saveState() {
@@ -188,14 +206,40 @@
       tasks: Array.isArray(saved.tasks) ? saved.tasks : [],
       memos: Array.isArray(saved.memos) ? saved.memos : [],
       policies: Array.isArray(saved.policies) ? saved.policies : [],
-      departments: Array.isArray(saved.departments) && saved.departments.length ? saved.departments : base.departments,
+      departments: normalizeDepartments(saved.departments, base.departments),
       projects: Array.isArray(saved.projects) ? saved.projects : [],
       deletedItems: Array.isArray(saved.deletedItems) ? saved.deletedItems : []
     };
     merged.tasks = merged.tasks.map(normalizeTask);
     merged.memos = merged.memos.map(normalizeMemo);
+    merged.policies = merged.policies.map(normalizePolicy);
     merged.deletedItems = merged.deletedItems.map(normalizeDeletedItem);
     return merged;
+  }
+
+  function normalizeDepartments(departments, fallback = []) {
+    const source = Array.isArray(departments) && departments.length ? departments : fallback;
+    const now = nowIso();
+    return source.map((department, index) => {
+      const id = department.id || uid("dept");
+      const defaultSort = defaultDepartmentOrderById.get(id);
+      return {
+        id,
+        name: normalizeDepartmentName(id, department.name),
+        parentId: "",
+        sortOrder: defaultSort || Number(department.sortOrder || index + 1),
+        createdAt: department.createdAt || now,
+        updatedAt: department.updatedAt || now
+      };
+    }).sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+  }
+
+  function normalizeDepartmentName(id, name) {
+    const text = String(name || "").trim();
+    const currentDefault = defaultDepartmentNamesById.get(id);
+    const legacyDefault = legacyDefaultDepartmentNamesById.get(id);
+    if (currentDefault && (!text || text === legacyDefault)) return currentDefault;
+    return text || currentDefault || "未名称";
   }
 
   function normalizeTask(task) {
@@ -252,6 +296,32 @@
       createdAt: memo.createdAt || nowIso(),
       updatedAt: memo.updatedAt || nowIso()
     };
+  }
+
+  function normalizePolicy(policy) {
+    return {
+      ...policy,
+      id: policy.id || uid("policy"),
+      title: policy.title || "方針",
+      type: normalizePolicyType(policy.type || "方針"),
+      periodStart: policy.periodStart || "",
+      periodEnd: policy.periodEnd || "",
+      departmentId: policy.departmentId || "",
+      background: policy.background || "",
+      policy: policy.policy || "",
+      actions: policy.actions || "",
+      notes: policy.notes || "",
+      taskIds: Array.isArray(policy.taskIds) ? policy.taskIds : [],
+      memoIds: Array.isArray(policy.memoIds) ? policy.memoIds : [],
+      createdAt: policy.createdAt || nowIso(),
+      updatedAt: policy.updatedAt || nowIso()
+    };
+  }
+
+  function normalizePolicyType(type) {
+    const text = String(type || "").trim();
+    if (text === "部門") return CLASSIFICATION_LABEL;
+    return text || "方針";
   }
 
   function normalizeDeletedItem(item) {
@@ -338,7 +408,7 @@
           <span class="section-count">${relatedPolicies.length}件</span>
         </div>
         <div class="policy-list">
-          ${relatedPolicies.length ? relatedPolicies.map(renderPolicyCard).join("") : renderEmpty("今日の期間に入る方針はありません。", "方針を追加")}
+          ${relatedPolicies.length ? relatedPolicies.map(renderPolicyCard).join("") : renderEmpty("今日の方針・施策はありません。", "方針を追加")}
         </div>
       </section>
       ${app.state.settings.showCompleted ? renderTaskSection("今日完了", completedToday, "今日完了したタスクはありません", "", date) : ""}
@@ -366,7 +436,7 @@
           <option value="today"${selected(filter, "today")}>今日</option>
           <option value="no-date"${selected(filter, "no-date")}>実施日なし</option>
           <option value="due"${selected(filter, "due")}>DLあり</option>
-          ${app.state.departments.map((department) => `<option value="dept:${escapeAttr(department.id)}"${selected(filter, `dept:${department.id}`)}>部門: ${escapeHtml(department.name)}</option>`).join("")}
+          ${app.state.departments.map((department) => `<option value="dept:${escapeAttr(department.id)}"${selected(filter, `dept:${department.id}`)}>${CLASSIFICATION_LABEL}: ${escapeHtml(department.name)}</option>`).join("")}
           ${app.state.projects.map((project) => `<option value="project:${escapeAttr(project.id)}"${selected(filter, `project:${project.id}`)}>PJ: ${escapeHtml(project.name)}</option>`).join("")}
         </select>
       </section>
@@ -481,6 +551,7 @@
     const classes = [
       "day-cell",
       day.inMonth ? "" : "is-muted",
+      calendarDateClass(day.date),
       iso === todayIso() ? "is-today" : "",
       iso === selectedDate ? "is-selected" : "",
       dueTasks.length ? "has-due" : ""
@@ -543,7 +614,7 @@
     const periods = getCalendarPeriodsForDate(isoDate, filter).slice(0, 3);
     if (!periods.length) return "";
     return `
-      <span class="period-lines" aria-label="期間">
+      <span class="period-lines" aria-label="方針・施策">
         ${periods.map((period) => {
           const classes = [
             "period-line",
@@ -569,25 +640,33 @@
   function renderCalendarPeriodSummary(date) {
     const periods = getCalendarPeriodsForDate(date, "all").slice(0, 4);
     return `
-      <section class="calendar-period-summary" aria-label="選択日の期間">
-        <span class="period-summary-label">期間</span>
+      <section class="calendar-period-summary" aria-label="選択日の方針・施策">
+        <span class="period-summary-label">方針・施策</span>
         <div class="period-summary-list">
           ${periods.length ? periods.map((period) => {
             const classes = [
               "period-summary-item",
               `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
             ].join(" ");
-            const cardAction = period.source === "project" ? "edit-project-period" : "edit-policy";
+            const action = period.source === "project" ? "edit-project-period" : "edit-policy";
+            const summary = compactPeriodSummary(period);
             return `
-              <span class="${classes}" data-card-action="${cardAction}" data-id="${escapeAttr(period.id)}" tabindex="0">
-                <strong>${escapeHtml(period.type || "期間")}</strong>
-                <span>${escapeHtml(truncate(period.title, 18))}</span>
-              </span>
+              <button class="${classes}" type="button" data-action="${action}" data-id="${escapeAttr(period.id)}" title="${escapeAttr(`${period.type || "方針"}: ${summary}`)}">
+                <strong>${escapeHtml(period.type || "方針")}</strong>
+                <span>${escapeHtml(summary)}</span>
+              </button>
             `;
-          }).join("") : `<span class="period-summary-empty">期間登録なし</span>`}
+          }).join("") : `<span class="period-summary-empty">方針・施策なし</span>`}
         </div>
       </section>
     `;
+  }
+
+  function compactPeriodSummary(period) {
+    const title = truncate(period.title || period.type || "方針", 16);
+    const detail = truncate(period.summary || "", 28);
+    if (!detail || detail === title) return title;
+    return `${title}: ${detail}`;
   }
 
   function renderCalendarPolicyFocus(date, filter) {
@@ -706,8 +785,8 @@
       },
       policies: {
         title: "今日の方針",
-        subtitle: `${formatLongDate(date)}の期間に入る方針`,
-        html: policies.length ? `<div class="policy-list">${policies.map(renderPolicyCard).join("")}</div>` : renderEmpty("今日の期間に入る方針はありません。", "方針を追加")
+        subtitle: `${formatLongDate(date)}の方針・施策`,
+        html: policies.length ? `<div class="policy-list">${policies.map(renderPolicyCard).join("")}</div>` : renderEmpty("今日の方針・施策はありません。", "方針を追加")
       }
     }[kind] || null;
     if (!summary) return;
@@ -864,6 +943,7 @@
     if (action === "open-settings") openSettings();
     if (action === "quick-import") openImportDialog();
     if (action === "close-dialog") closeDialogs();
+    if (action === "clear-task-action-date") clearTaskActionDate(button);
     if (action === "open-kind") openKind(button.dataset.kind);
     if (action === "set-entry-kind") await setEntryKind(button.dataset.kind);
     if (action === "open-today-summary") openTodaySummaryDialog(button.dataset.summary);
@@ -894,6 +974,7 @@
     if (action === "month-prev") await changeMonth(-1);
     if (action === "month-next") await changeMonth(1);
     if (action === "select-day") await selectDay(button.dataset.date);
+    if (action === "edit-project-period") openSettings();
     if (action === "resolve-conflict") await resolveConflict(button.dataset.mode);
     if (action === "back-to-task-form") reopenPendingTaskForm();
     if (action === "export-json") exportJson();
@@ -933,7 +1014,7 @@
       openPolicyForm(policy);
     } else if (action === "edit-project-period") {
       openSettings();
-      showToast("プロジェクト期間は設定で編集できます。");
+      showToast("プロジェクトの方針・施策は設定で編集できます。");
     } else {
       return false;
     }
@@ -1028,6 +1109,15 @@
     updateTaskPriorityPreview(form);
   }
 
+  function clearTaskActionDate(button) {
+    const form = button.closest("form");
+    const input = form?.elements.actionDate;
+    if (!input) return;
+    input.value = "";
+    updateTaskPriorityPreview(form);
+    input.focus();
+  }
+
   function openAddForCurrentContext() {
     openAddChoice(defaultAddKind());
   }
@@ -1080,7 +1170,10 @@
           <div class="field-inline task-date-row">
             <div class="field">
               <label for="taskActionDate">実施</label>
-              <input id="taskActionDate" name="actionDate" type="date" value="${escapeAttr(value.actionDate)}">
+              <div class="date-control">
+                <input id="taskActionDate" name="actionDate" type="date" value="${escapeAttr(value.actionDate)}">
+                <button class="mini-button date-reset-button" type="button" data-action="clear-task-action-date">リセット</button>
+              </div>
             </div>
             <div class="field">
               <label for="taskDueDate">DL</label>
@@ -1098,7 +1191,7 @@
               <input id="taskAssignee" name="assignee" value="${escapeAttr(value.assignee)}" autocomplete="off" placeholder="任意">
             </div>
             <div class="field">
-              <label for="taskDepartment">部門</label>
+              <label for="taskDepartment">${CLASSIFICATION_LABEL}</label>
               <select id="taskDepartment" name="departmentId">${renderDepartmentOptions(value.departmentId)}</select>
             </div>
             <div class="field">
@@ -1192,7 +1285,7 @@
               <select id="memoPriority" name="priority">${renderPriorityOptions(existing?.priority || "NONE")}</select>
             </div>
             <div class="field">
-              <label for="memoDepartment">部門</label>
+              <label for="memoDepartment">${CLASSIFICATION_LABEL}</label>
               <select id="memoDepartment" name="departmentId">${renderDepartmentOptions(existing?.departmentId || "")}</select>
             </div>
           </div>
@@ -1228,7 +1321,7 @@
             <div class="field">
               <label for="policyType">種別</label>
               <select id="policyType" name="type">
-                ${["月次", "週次", "半期", "部門", "施策", "イベント", "在庫", "売場", "商売計画"].map((type) => `<option value="${type}"${selected(existing.type, type)}>${type}</option>`).join("")}
+                ${["月次", "週次", "半期", "分類", "施策", "イベント", "在庫", "売場", "商売計画"].map((type) => `<option value="${type}"${selected(existing.type, type)}>${type}</option>`).join("")}
               </select>
             </div>
             <div class="field">
@@ -1241,7 +1334,7 @@
             </div>
           </div>
           <div class="field">
-            <label for="policyDepartment">部門</label>
+            <label for="policyDepartment">${CLASSIFICATION_LABEL}</label>
             <select id="policyDepartment" name="departmentId">${renderDepartmentOptions(existing.departmentId || "")}</select>
           </div>
           <div class="field">
@@ -1293,7 +1386,7 @@
     const createdAt = nowIso();
     app.state.departments.push({
       id: uid("dept"),
-      name: "新しい部門",
+      name: "新しい分類",
       parentId: "",
       sortOrder: app.state.departments.length + 1,
       createdAt,
@@ -1302,7 +1395,7 @@
     saveState().then(() => {
       closeDialogs();
       openSettings();
-      showToast("部門を追加しました。設定で名前を変更できます。");
+      showToast("分類を追加しました。設定で名前を変更できます。");
     });
   }
 
@@ -1691,7 +1784,7 @@
       ...existing,
       id,
       title: String(data.get("title") || "").trim(),
-      type: String(data.get("type") || "方針"),
+      type: normalizePolicyType(data.get("type") || "方針"),
       periodStart: String(data.get("periodStart") || ""),
       periodEnd: String(data.get("periodEnd") || ""),
       departmentId: String(data.get("departmentId") || ""),
@@ -1865,7 +1958,7 @@
       syncTaskLinksForMemo(memo);
     }
     if (kind === "policies") {
-      upsertById(app.state.policies, deleted.item);
+      upsertById(app.state.policies, normalizePolicy(deleted.item));
     }
     app.state.deletedItems = app.state.deletedItems.filter((item) => item.id !== id);
     await saveState();
@@ -1886,7 +1979,7 @@
 
   function entityTitle(kind, item) {
     if (kind === "projects") return item.name || "プロジェクト";
-    if (kind === "departments") return item.name || "部門";
+    if (kind === "departments") return item.name || CLASSIFICATION_LABEL;
     return item.title || item.name || "項目";
   }
 
@@ -2219,7 +2312,7 @@
           </section>
           <section class="settings-block">
             <div class="section-head">
-              <h2 class="section-title">部門</h2>
+              <h2 class="section-title">${CLASSIFICATION_LABEL}</h2>
               <button class="mini-button" type="button" data-action="add-department">追加</button>
             </div>
             <div class="list-editor" id="departmentRows">
@@ -2293,7 +2386,7 @@
   function renderDepartmentRow(department) {
     return `
       <div class="list-row" data-row="department" data-id="${escapeAttr(department.id)}">
-        <input name="departmentName" value="${escapeAttr(department.name)}" aria-label="部門名">
+        <input name="departmentName" value="${escapeAttr(department.name)}" aria-label="分類名">
         <button class="mini-button" type="button" data-action="remove-settings-row">削除</button>
       </div>
     `;
@@ -2310,7 +2403,7 @@
 
   function addSettingsRow(type) {
     if (type === "department") {
-      document.getElementById("departmentRows")?.insertAdjacentHTML("beforeend", renderDepartmentRow({ id: uid("dept"), name: "新しい部門" }));
+      document.getElementById("departmentRows")?.insertAdjacentHTML("beforeend", renderDepartmentRow({ id: uid("dept"), name: "新しい分類" }));
     }
     if (type === "project") {
       document.getElementById("projectRows")?.insertAdjacentHTML("beforeend", renderProjectRow({ id: uid("project"), name: "新しいプロジェクト" }));
@@ -2503,7 +2596,7 @@
         ...policy,
         id: policy.id || uid("policy"),
         title: policy.title || "方針",
-        type: policy.type || "方針",
+        type: normalizePolicyType(policy.type || "方針"),
         periodStart: policy.periodStart || "",
         periodEnd: policy.periodEnd || "",
         departmentId: policy.departmentId || "",
@@ -2542,8 +2635,8 @@
     }
     app.state.tasks = Array.isArray(payload.tasks) ? payload.tasks.map(normalizeTask) : app.state.tasks;
     app.state.memos = Array.isArray(payload.memos) ? payload.memos.map(normalizeMemo) : app.state.memos;
-    app.state.policies = Array.isArray(payload.policies) ? payload.policies : app.state.policies;
-    app.state.departments = Array.isArray(payload.departments) && payload.departments.length ? payload.departments : app.state.departments;
+    app.state.policies = Array.isArray(payload.policies) ? payload.policies.map(normalizePolicy) : app.state.policies;
+    app.state.departments = normalizeDepartments(payload.departments, app.state.departments);
     app.state.projects = Array.isArray(payload.projects) ? payload.projects : app.state.projects;
     app.state.deletedItems = Array.isArray(payload.deletedItems) ? payload.deletedItems.map(normalizeDeletedItem) : app.state.deletedItems;
     app.state.updatedAt = now;
@@ -2576,7 +2669,7 @@
         priority: normalizePriority(task.priority || task.優先度),
         status: task.status || task.状態 || "active",
         completedAt: task.completedAt || null,
-        departmentId: matchDepartmentId(task.department || task.departmentName || task.部門),
+        departmentId: matchDepartmentId(task.department || task.departmentName || task.category || task.categoryName || task.分類 || task.部門),
         projectId: matchProjectId(task.project || task.projectName || task.プロジェクト)
       })).filter((task) => task.title),
       memos: (source.memos || source.notes || []).map((memo) => ({
@@ -2588,15 +2681,15 @@
         transcript: memo.transcript || memo.文字起こし || "",
         dueDate: toDateInputValueFromUnknown(memo.dueDate || memo.DL || memo.期限),
         priority: normalizePriority(memo.priority || memo.優先度),
-        departmentId: matchDepartmentId(memo.department || memo.departmentName || memo.部門),
+        departmentId: matchDepartmentId(memo.department || memo.departmentName || memo.category || memo.categoryName || memo.分類 || memo.部門),
         projectId: matchProjectId(memo.project || memo.projectName || memo.プロジェクト)
       })).filter((memo) => memo.body || memo.title),
       policies: (source.policies || []).map((policy) => ({
         title: policy.title || policy.name || policy.タイトル || "方針",
-        type: policy.type || policy.種別 || "方針",
+        type: normalizePolicyType(policy.type || policy.種別 || "方針"),
         periodStart: toDateInputValueFromUnknown(policy.periodStart || policy.start || policy.開始),
         periodEnd: toDateInputValueFromUnknown(policy.periodEnd || policy.end || policy.終了),
-        departmentId: matchDepartmentId(policy.department || policy.departmentName || policy.部門),
+        departmentId: matchDepartmentId(policy.department || policy.departmentName || policy.category || policy.categoryName || policy.分類 || policy.部門),
         background: policy.background || policy.背景 || "",
         policy: policy.policy || policy.body || policy.content || policy.方針 || "",
         actions: policy.actions || policy.やること || "",
@@ -2618,7 +2711,7 @@
         actionDate: toDateInputValueFromUnknown(row.actionDate || row.実施日 || row.date),
         dueDate: toDateInputValueFromUnknown(row.dueDate || row.DL || row.期限日),
         priority: normalizePriority(row.priority || row.優先度),
-        departmentId: matchDepartmentId(row.department || row.部門),
+        departmentId: matchDepartmentId(row.department || row.category || row.分類 || row.部門),
         projectId: matchProjectId(row.project || row.プロジェクト)
       };
     }).filter((task) => task.title);
@@ -2834,9 +2927,9 @@
       <option value="today"${selected(current, "today")}>今日</option>
       <option value="no-date"${selected(current, "no-date")}>実施日なし</option>
       <option value="due"${selected(current, "due")}>DLあり</option>
-      <option value="no-dept"${selected(current, "no-dept")}>部門未設定</option>
+      <option value="no-dept"${selected(current, "no-dept")}>分類未設定</option>
       ${app.state.departments.map((department) =>
-        `<option value="dept:${escapeAttr(department.id)}"${selected(current, `dept:${department.id}`)}>部門: ${escapeHtml(department.name)}</option>`
+        `<option value="dept:${escapeAttr(department.id)}"${selected(current, `dept:${department.id}`)}>${CLASSIFICATION_LABEL}: ${escapeHtml(department.name)}</option>`
       ).join("")}
       ${app.state.projects.map((project) =>
         `<option value="project:${escapeAttr(project.id)}"${selected(current, `project:${project.id}`)}>PJ: ${escapeHtml(project.name)}</option>`
@@ -3124,7 +3217,8 @@
         title: policy.title,
         start: policy.periodStart || policy.periodEnd,
         end: policy.periodEnd || policy.periodStart,
-        type: policy.type || "方針",
+        type: normalizePolicyType(policy.type || "方針"),
+        summary: firstNonEmpty(policy.policy, policy.actions, policy.background, policy.notes, policy.title),
         source: "policy",
         departmentId: policy.departmentId || "",
         projectId: ""
@@ -3137,11 +3231,16 @@
         start: project.startDate || project.endDate,
         end: project.endDate || project.startDate,
         type: "プロジェクト",
+        summary: firstNonEmpty(project.purpose, project.name),
         source: "project",
         departmentId: project.departmentId || "",
         projectId: project.id
       }));
     return [...policyPeriods, ...projectPeriods].filter((period) => period.start && period.end);
+  }
+
+  function firstNonEmpty(...values) {
+    return values.map((value) => String(value || "").trim()).find(Boolean) || "";
   }
 
   function stableIndex(value, modulo) {
@@ -3178,6 +3277,86 @@
   function toDateInputValue(date) {
     const value = date instanceof Date ? date : new Date(date);
     return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+
+  function calendarDateClass(date) {
+    const day = date.getDay();
+    if (day === 0 || isJapaneseHoliday(date)) return "is-holiday";
+    if (day === 6) return "is-saturday";
+    return "is-weekday";
+  }
+
+  function isJapaneseHoliday(date) {
+    return Boolean(getJapaneseHolidayName(date));
+  }
+
+  function getJapaneseHolidayName(value) {
+    const date = value instanceof Date ? value : dateObject(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return getBaseJapaneseHolidayName(date) || getSubstituteHolidayName(date) || getCitizensHolidayName(date);
+  }
+
+  function getBaseJapaneseHolidayName(date) {
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    if (month === 1 && day === 1) return "元日";
+    if (month === 1 && day === nthWeekdayDateOfMonth(year, 0, 1, 2)) return "成人の日";
+    if (month === 2 && day === 11) return "建国記念の日";
+    if (month === 2 && day === 23) return "天皇誕生日";
+    if (month === 3 && day === springEquinoxDay(year)) return "春分の日";
+    if (month === 4 && day === 29) return "昭和の日";
+    if (month === 5 && day === 3) return "憲法記念日";
+    if (month === 5 && day === 4) return "みどりの日";
+    if (month === 5 && day === 5) return "こどもの日";
+    if (month === 7 && day === nthWeekdayDateOfMonth(year, 6, 1, 3)) return "海の日";
+    if (month === 8 && day === 11) return "山の日";
+    if (month === 9 && day === nthWeekdayDateOfMonth(year, 8, 1, 3)) return "敬老の日";
+    if (month === 9 && day === autumnEquinoxDay(year)) return "秋分の日";
+    if (month === 10 && day === nthWeekdayDateOfMonth(year, 9, 1, 2)) return "スポーツの日";
+    if (month === 11 && day === 3) return "文化の日";
+    if (month === 11 && day === 23) return "勤労感謝の日";
+    return "";
+  }
+
+  function getSubstituteHolidayName(date) {
+    if (date < new Date("1973-04-12T00:00:00")) return "";
+    const cursor = new Date(date);
+    cursor.setDate(cursor.getDate() - 1);
+    let hasSundayHoliday = false;
+    while (getBaseJapaneseHolidayName(cursor)) {
+      if (cursor.getDay() === 0) hasSundayHoliday = true;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    return hasSundayHoliday ? "振替休日" : "";
+  }
+
+  function getCitizensHolidayName(date) {
+    if (date.getFullYear() < 1985) return "";
+    if (getBaseJapaneseHolidayName(date) || getSubstituteHolidayName(date)) return "";
+    const previous = new Date(date);
+    const next = new Date(date);
+    previous.setDate(previous.getDate() - 1);
+    next.setDate(next.getDate() + 1);
+    return holidayNameWithoutCitizens(previous) && holidayNameWithoutCitizens(next) ? "国民の休日" : "";
+  }
+
+  function holidayNameWithoutCitizens(date) {
+    return getBaseJapaneseHolidayName(date) || getSubstituteHolidayName(date);
+  }
+
+  function nthWeekdayDateOfMonth(year, monthIndex, weekday, nth) {
+    const first = new Date(year, monthIndex, 1);
+    const offset = (weekday - first.getDay() + 7) % 7;
+    return 1 + offset + (nth - 1) * 7;
+  }
+
+  function springEquinoxDay(year) {
+    return Math.floor(20.8431 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+  }
+
+  function autumnEquinoxDay(year) {
+    return Math.floor(23.2488 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
   }
 
   function toDateInputValueFromUnknown(value) {
@@ -3306,8 +3485,11 @@
 
   function matchDepartmentId(name) {
     if (!name) return "";
-    const found = app.state.departments.find((department) => department.name === name);
-    return found?.id || "";
+    const text = String(name).trim();
+    const found = app.state.departments.find((department) => department.name === text);
+    if (found) return found.id;
+    const legacyId = legacyDefaultDepartmentIdsByName.get(text);
+    return legacyId && findById(app.state.departments, legacyId) ? legacyId : "";
   }
 
   function matchProjectId(name) {

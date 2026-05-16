@@ -1,4 +1,4 @@
-const CACHE_NAME = "claris-cache-v12";
+const CACHE_NAME = "claris-cache-v13";
 const ASSETS = [
   "./",
   "./index.html",

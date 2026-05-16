@@ -11,6 +11,11 @@
   --blue: #426c85;
   --amber: #d7b46a;
   --red: #d85c4a;
+  --calendar-selected: #2f7df0;
+  --calendar-saturday: #2f6fbd;
+  --calendar-holiday: #cf4f3f;
+  --due-surface: #fff0eb;
+  --due-surface-strong: #ffe8df;
   --shadow: 0 16px 40px rgba(20, 25, 24, 0.13);
   --ease-liquid: cubic-bezier(0.19, 1, 0.22, 1);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -282,7 +287,7 @@ input[type="checkbox"] {
 .policy-card:focus-visible,
 .policy-focus-card:focus-visible,
 .period-summary-item:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--calendar-selected);
   outline-offset: 3px;
 }
 
@@ -506,6 +511,18 @@ input[type="checkbox"] {
 
 .field-inline {
   grid-template-columns: 1fr;
+}
+
+.date-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.date-reset-button {
+  min-height: 42px;
+  padding-inline: 9px;
 }
 
 label {
@@ -875,18 +892,18 @@ audio {
 .day-cell.is-selected {
   background: rgba(255, 255, 255, 0.94);
   color: var(--ink);
-  border-color: #2f7df0;
-  box-shadow: inset 0 0 0 2px #2f7df0, 0 8px 18px rgba(47, 125, 240, 0.14);
+  border-color: var(--calendar-selected);
+  box-shadow: inset 0 0 0 2px var(--calendar-selected), 0 8px 18px rgba(47, 125, 240, 0.14);
 }
 
 .day-cell.has-due {
-  background: rgba(255, 255, 255, 0.88);
-  border-color: rgba(23, 33, 31, 0.42);
-  box-shadow: inset 0 -3px 0 rgba(23, 33, 31, 0.16);
+  background: var(--due-surface);
 }
 
 .day-cell.has-due.is-selected {
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--due-surface-strong);
+  border-color: var(--calendar-selected);
+  box-shadow: inset 0 0 0 2px var(--calendar-selected), 0 8px 18px rgba(47, 125, 240, 0.14);
 }
 
 .day-head {
@@ -901,7 +918,15 @@ audio {
   font-weight: 900;
   font-size: 17px;
   line-height: 1.05;
-  color: #2f7df0;
+  color: var(--ink);
+}
+
+.day-cell.is-saturday .day-number {
+  color: var(--calendar-saturday);
+}
+
+.day-cell.is-holiday .day-number {
+  color: var(--calendar-holiday);
 }
 
 .day-badge-stack {
@@ -936,7 +961,8 @@ audio {
 }
 
 .day-priority-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
   gap: 4px;
   width: 100%;
@@ -947,15 +973,17 @@ audio {
 }
 
 .day-priority-token {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 17px;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
   display: grid;
-  place-items: center;
+  place-content: center;
+  justify-self: center;
   border: 1px solid rgba(23, 33, 31, 0.1);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.5);
-  padding: 0 1px;
+  padding: 0;
+  text-align: center;
 }
 
 .day-priority-token.is-active.priority-p1 {
@@ -1042,6 +1070,7 @@ audio {
   color: var(--muted);
   font-size: 11px;
   font-weight: 900;
+  white-space: nowrap;
 }
 
 .period-summary-list {
@@ -1063,6 +1092,7 @@ audio {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  border: 0;
   border-left: 4px solid var(--period-color, var(--line));
   border-radius: 7px;
   padding: 4px 7px 4px 6px;
@@ -1070,6 +1100,8 @@ audio {
   color: var(--ink);
   font-size: 11px;
   font-weight: 800;
+  text-align: left;
+  appearance: none;
 }
 
 .period-summary-item strong,

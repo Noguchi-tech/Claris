@@ -2173,7 +2173,7 @@
   "departments": [
     {
       "id": "dept_store",
-      "name": "店舗全体",
+      "name": "庶務",
       "parentId": "",
       "sortOrder": 1,
       "createdAt": "2026-05-16T16:32:35.663Z",
@@ -2197,15 +2197,15 @@
     },
     {
       "id": "dept_life",
-      "name": "生活",
+      "name": "H＆B",
       "parentId": "",
       "sortOrder": 4,
       "createdAt": "2026-05-16T16:32:35.663Z",
       "updatedAt": "2026-05-16T16:32:35.663Z"
     },
     {
-      "id": "dept_large",
-      "name": "大型",
+      "id": "dept_houseware",
+      "name": "ハウス",
       "parentId": "",
       "sortOrder": 5,
       "createdAt": "2026-05-16T16:32:35.663Z",
@@ -2213,16 +2213,16 @@
     },
     {
       "id": "dept_kitchen",
-      "name": "キッチン",
-      "parentId": "dept_life",
+      "name": "ステー",
+      "parentId": "",
       "sortOrder": 6,
       "createdAt": "2026-05-16T16:32:35.663Z",
       "updatedAt": "2026-05-16T16:32:35.663Z"
     },
     {
-      "id": "dept_houseware",
-      "name": "ハウスウェア",
-      "parentId": "dept_life",
+      "id": "dept_large",
+      "name": "大型",
+      "parentId": "",
       "sortOrder": 7,
       "createdAt": "2026-05-16T16:32:35.663Z",
       "updatedAt": "2026-05-16T16:32:35.663Z"
