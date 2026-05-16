@@ -399,6 +399,12 @@ input[type="checkbox"] {
   font-weight: 750;
 }
 
+.mini-button.is-active {
+  color: #fff;
+  border-color: var(--green);
+  background: var(--green);
+}
+
 .empty-state {
   padding: 16px;
   color: var(--muted);
@@ -439,6 +445,11 @@ input[type="checkbox"] {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.entry-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(132px, 0.7fr);
 }
 
 .field,
@@ -518,11 +529,17 @@ textarea {
 }
 
 .sheet-header {
+  position: sticky;
+  top: -16px;
+  z-index: 4;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
-  margin-bottom: 14px;
+  margin: -16px -16px 14px;
+  padding: 16px;
+  border-bottom: 1px solid rgba(23, 33, 31, 0.08);
+  background: var(--bg);
 }
 
 .sheet-header > div,
@@ -550,11 +567,18 @@ textarea {
 }
 
 .form-actions {
+  position: sticky;
+  bottom: -16px;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 16px;
+  margin: 16px -16px -16px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid rgba(23, 33, 31, 0.08);
+  background: rgba(246, 245, 242, 0.95);
+  backdrop-filter: blur(12px);
 }
 
 .choice-grid {
@@ -601,12 +625,18 @@ textarea {
   gap: 6px;
 }
 
+.conflict-task-panel {
+  background: #fffdf9;
+}
+
 .conflict-new {
   border-color: rgba(79, 124, 172, 0.38);
+  background: #f3f8fb;
 }
 
 .conflict-existing {
   border-color: rgba(216, 92, 74, 0.36);
+  background: #fff6f2;
 }
 
 .conflict-label {
@@ -640,15 +670,36 @@ textarea {
   min-height: 64px;
 }
 
+.conflict-action-button {
+  border-color: rgba(66, 108, 133, 0.28);
+  background: #eef5f7;
+}
+
+.conflict-back-button {
+  border-color: rgba(184, 79, 67, 0.24);
+  background: #f7e8e4;
+}
+
+.conflict-back-button strong {
+  color: #8b352d;
+}
+
 .memo-card,
 .policy-card,
 .quick-capture,
+.memo-recording-panel,
 .settings-block,
 .calendar-day-detail,
 .import-preview {
   padding: 13px;
   display: grid;
   gap: 10px;
+}
+
+.memo-recording-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf9;
 }
 
 .memo-card h3,
@@ -781,13 +832,58 @@ audio {
 }
 
 .day-priority-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 3px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  width: 100%;
   color: inherit;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
-  line-height: 1.12;
+  line-height: 1;
+}
+
+.day-priority-token {
+  min-width: 0;
+  min-height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(23, 33, 31, 0.1);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.day-priority-token.is-active.priority-p1 {
+  color: #fff;
+  background: var(--red);
+}
+
+.day-priority-token.is-active.priority-p2 {
+  color: #fff;
+  background: var(--blue);
+}
+
+.day-priority-token.is-active.priority-p3 {
+  color: var(--ink);
+  background: var(--amber);
+}
+
+.day-priority-token.is-active.priority-sub {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.day-priority-token.is-muted {
+  color: rgba(23, 33, 31, 0.28);
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.day-cell.is-selected .day-priority-token {
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+.day-cell.is-selected .day-priority-token.is-muted {
+  color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .day-metrics {
@@ -1118,6 +1214,111 @@ audio {
   display: none !important;
 }
 
+.task-date-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.recurrence-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf9;
+  padding: 10px;
+}
+
+.recurrence-head {
+  grid-template-columns: minmax(0, 1.4fr) minmax(88px, 0.6fr);
+}
+
+.recurrence-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.weekday-choice {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.weekday-choice input {
+  width: 18px;
+}
+
+.priority-availability {
+  min-height: 30px;
+}
+
+.availability-note {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.availability-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 6px;
+}
+
+.availability-row-empty {
+  grid-template-columns: minmax(72px, 0.8fr) minmax(0, 2fr);
+  align-items: stretch;
+}
+
+.availability-pill {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  background: #fff;
+  text-align: left;
+}
+
+.availability-pill strong,
+.availability-pill small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.availability-pill strong {
+  font-size: 11px;
+}
+
+.availability-pill small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.availability-pill.is-open {
+  border-color: rgba(31, 52, 48, 0.3);
+  background: var(--green-soft);
+}
+
+.availability-pill.is-occupied {
+  border-color: rgba(216, 92, 74, 0.38);
+  background: #fff1ee;
+}
+
+.availability-pill.is-selected {
+  box-shadow: inset 0 0 0 2px var(--green);
+}
+
+.availability-pill.is-none {
+  background: #f1eee8;
+  border-color: #dfd7cc;
+}
+
 @media (min-width: 680px) {
   .app-shell {
     padding-left: 16px;
@@ -1208,8 +1409,13 @@ audio {
 
 .availability-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
   gap: 6px;
+}
+
+.availability-row-empty {
+  grid-template-columns: minmax(72px, 0.8fr) minmax(0, 2fr);
+  align-items: stretch;
 }
 
 .availability-pill {
@@ -1219,7 +1425,9 @@ audio {
   padding: 6px;
   display: grid;
   gap: 2px;
+  justify-items: start;
   background: #fff;
+  text-align: left;
 }
 
 .availability-pill strong,
@@ -1254,14 +1462,23 @@ audio {
   box-shadow: inset 0 0 0 2px var(--green);
 }
 
+.availability-pill.is-none {
+  background: #f1eee8;
+  border-color: #dfd7cc;
+}
+
   .day-cell {
     min-height: 76px;
     padding: 4px;
   }
 
   .day-priority-row {
-    font-size: 9px;
-    gap: 1px 3px;
+    font-size: 10px;
+    gap: 1px;
+  }
+
+  .day-priority-token {
+    min-height: 16px;
   }
 
   .day-metrics span {

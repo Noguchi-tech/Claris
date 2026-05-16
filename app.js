@@ -5,7 +5,7 @@
   const DB_VERSION = 1;
   const STORE = "app";
   const STATE_KEY = "state";
-  const BUNDLED_TASK_IMPORT_URL = "./data/current-todo-tasks-2026-05-15.json";
+  const BUNDLED_TASK_IMPORT_URL = "./data/current-todo-tasks-2026-05-16.json";
   const SINGLE_SLOT_PRIORITIES = ["P1", "P2", "P3"];
   const PERIOD_LINE_CLASS_COUNT = 6;
 
@@ -15,6 +15,12 @@
     P3: { label: "3次優先", className: "priority-p3" },
     SUB: { label: "サブタスク", className: "priority-sub" },
     NONE: { label: "未設定", className: "priority-none" }
+  };
+  const entryKindMeta = {
+    all: "すべて",
+    task: "タスク",
+    memo: "メモ",
+    policy: "方針"
   };
 
   const tabs = {
@@ -147,6 +153,9 @@
       ui: {
         activeTab: "today",
         taskFilter: "all",
+        entryKind: "all",
+        entryFilter: "all",
+        entrySearch: "",
         calendarFilter: "all",
         calendarMonth: monthKey(new Date()),
         selectedDate: todayIso()
@@ -358,38 +367,58 @@
   }
 
   function renderEntriesView() {
-    const activeTasks = sortTasksByActionDate(app.state.tasks.filter((task) => task.status === "active"));
-    const completed = sortTasksByActionDate(app.state.tasks.filter((task) => task.status === "completed"));
-    const memos = [...app.state.memos].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    const policies = [...app.state.policies].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const kind = entryKindMeta[app.state.ui.entryKind] ? app.state.ui.entryKind : "all";
+    const filter = app.state.ui.entryFilter || "all";
+    const query = app.state.ui.entrySearch || "";
+    const activeTasks = sortTasksByActionDate(app.state.tasks.filter((task) =>
+      task.status === "active" && matchesEntryItem(task, "task", filter, query)
+    ));
+    const completed = sortTasksByActionDate(app.state.tasks.filter((task) =>
+      task.status === "completed" && matchesEntryItem(task, "task", filter, query)
+    ));
+    const memos = app.state.memos
+      .filter((memo) => matchesEntryItem(memo, "memo", filter, query))
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const policies = app.state.policies
+      .filter((policy) => matchesEntryItem(policy, "policy", filter, query))
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const showTasks = kind === "all" || kind === "task";
+    const showMemos = kind === "all" || kind === "memo";
+    const showPolicies = kind === "all" || kind === "policy";
 
     view.innerHTML = `
       <section class="toolbar entries-toolbar">
-        <button class="mini-button" type="button" data-action="open-kind" data-kind="task">タスク</button>
-        <button class="mini-button" type="button" data-action="open-kind" data-kind="memo">メモ</button>
-        <button class="mini-button" type="button" data-action="open-kind" data-kind="policy">方針</button>
+        ${Object.entries(entryKindMeta).map(([value, label]) => `
+          <button class="mini-button ${kind === value ? "is-active" : ""}" type="button" data-action="set-entry-kind" data-kind="${value}">${label}</button>
+        `).join("")}
       </section>
-      ${renderTaskSection("タスク", activeTasks, "タスクはまだありません。")}
-      ${app.state.settings.showCompleted ? renderTaskSection("完了済み", completed, "完了済みタスクはありません") : ""}
-      ${renderQuickCapture()}
-      <section class="section">
+      <section class="toolbar entry-filter-bar">
+        <input id="entrySearch" type="search" value="${escapeAttr(query)}" placeholder="検索" autocomplete="off">
+        <select id="entryFilter" aria-label="一覧フィルター">
+          ${renderEntryFilterOptions(filter)}
+        </select>
+      </section>
+      ${showTasks ? renderTaskSection("タスク", activeTasks, "該当するタスクはありません。") : ""}
+      ${showTasks && app.state.settings.showCompleted ? renderTaskSection("完了済み", completed, "該当する完了済みタスクはありません") : ""}
+      ${showMemos ? renderQuickCapture() : ""}
+      ${showMemos ? `<section class="section">
         <div class="section-head">
           <h2 class="section-title">メモ</h2>
           <span class="section-count">${memos.length}件</span>
         </div>
         <div class="memo-list">
-          ${memos.length ? memos.map(renderMemoCard).join("") : renderEmpty("メモはまだありません。", "メモを追加")}
+          ${memos.length ? memos.map(renderMemoCard).join("") : renderEmpty("該当するメモはありません。", "メモを追加")}
         </div>
-      </section>
-      <section class="section">
+      </section>` : ""}
+      ${showPolicies ? `<section class="section">
         <div class="section-head">
           <h2 class="section-title">方針</h2>
           <span class="section-count">${policies.length}件</span>
         </div>
         <div class="policy-list">
-          ${policies.length ? policies.map(renderPolicyCard).join("") : renderEmpty("方針はまだありません。", "方針を追加")}
+          ${policies.length ? policies.map(renderPolicyCard).join("") : renderEmpty("該当する方針はありません。", "方針を追加")}
         </div>
-      </section>
+      </section>` : ""}
     `;
     updateTranscriptPreview(getRecordingPreviewText());
     updateRecordingButtons();
@@ -472,12 +501,18 @@
 
   function renderDayPrioritySummary(actionTasks) {
     const count = (priority) => actionTasks.filter((task) => task.priority === priority).length;
+    const tokens = [
+      ["P1", "最"],
+      ["P2", "2"],
+      ["P3", "3"],
+      ["SUB", "サ"]
+    ];
     return `
       <span class="day-priority-row" aria-label="作業優先度">
-        <span>最${count("P1") ? "●" : "-"}</span>
-        <span>2${count("P2") ? "●" : "-"}</span>
-        <span>3${count("P3") ? "●" : "-"}</span>
-        ${count("SUB") ? `<span>サ${count("SUB")}</span>` : ""}
+        ${tokens.map(([priority, label]) => {
+          const total = count(priority);
+          return `<span class="day-priority-token ${total ? "is-active" : "is-muted"} ${priorityMeta[priority].className}" title="${priorityMeta[priority].label}: ${total}件">${label}</span>`;
+        }).join("")}
       </span>
     `;
   }
@@ -554,10 +589,10 @@
       <section class="quick-capture">
         <div class="section-head">
           <h2 class="section-title">走り書きメモ</h2>
-          <span class="recording-status" id="recordingStatus">録音待機中</span>
+          <span class="recording-status" id="recordingStatus" data-recording-status>録音待機中</span>
         </div>
         <textarea id="quickMemoText" placeholder="とっさの話し合い、指示、気づきをそのまま入力"></textarea>
-        <div id="recordingTranscriptPreview" class="transcript-preview hidden" aria-live="polite"></div>
+        <div id="recordingTranscriptPreview" class="transcript-preview hidden" data-recording-transcript-preview aria-live="polite"></div>
         <div class="recording-bar">
           <button class="solid-button compact" type="button" data-action="save-quick-memo">保存</button>
           <button class="ghost-button compact" type="button" data-action="start-recording">録音</button>
@@ -735,6 +770,8 @@
     if (action === "quick-import") openImportDialog();
     if (action === "close-dialog") closeDialogs();
     if (action === "open-kind") openKind(button.dataset.kind);
+    if (action === "set-entry-kind") await setEntryKind(button.dataset.kind);
+    if (action === "select-priority-slot") selectPrioritySlot(button);
     if (action === "edit-task") openTaskForm(findById(app.state.tasks, id));
     if (action === "edit-memo") openMemoForm(findById(app.state.memos, id));
     if (action === "edit-policy") openPolicyForm(findById(app.state.policies, id));
@@ -789,6 +826,11 @@
       await saveState();
       render();
     }
+    if (event.target.id === "entryFilter") {
+      app.state.ui.entryFilter = event.target.value;
+      await saveState();
+      render();
+    }
     if (event.target.id === "calendarFilter") {
       app.state.ui.calendarFilter = event.target.value;
       await saveState();
@@ -799,6 +841,17 @@
   function handleInput(event) {
     if (event.target.matches("[data-task-search]")) {
       filterTaskPicker(event.target);
+    }
+    if (event.target.id === "entrySearch") {
+      const cursor = event.target.selectionStart || 0;
+      app.state.ui.entrySearch = event.target.value;
+      saveState();
+      renderEntriesView();
+      const search = document.getElementById("entrySearch");
+      if (search) {
+        search.focus();
+        search.setSelectionRange(cursor, cursor);
+      }
     }
   }
 
@@ -819,6 +872,29 @@
     if (kind === "policy") openPolicyForm();
     if (kind === "project") openProjectForm();
     if (kind === "department") openDepartmentForm();
+  }
+
+  async function setEntryKind(kind) {
+    app.state.ui.entryKind = entryKindMeta[kind] ? kind : "all";
+    await saveState();
+    render();
+  }
+
+  function selectPrioritySlot(button) {
+    const priority = button.dataset.priority || "";
+    if (!priorityMeta[priority]) return;
+    const conflictTarget = button.closest("#conflictMoveAvailability");
+    if (conflictTarget) {
+      const input = document.getElementById("conflictMovePriority");
+      if (input) input.value = priority;
+      updateConflictMovePreview();
+      return;
+    }
+    const form = button.closest("form");
+    const input = form?.elements.priority;
+    if (!input) return;
+    input.value = priority;
+    updateTaskPriorityPreview(form);
   }
 
   function openAddForCurrentContext() {
@@ -882,8 +958,9 @@
           </div>
           <div class="field-inline">
             <div class="field">
-              <label for="taskPriority">優先度</label>
-              <select id="taskPriority" name="priority">${renderPriorityOptions(value.priority)}</select>
+              <label>優先度の空き状況</label>
+              <input id="taskPriority" name="priority" type="hidden" value="${escapeAttr(value.priority)}">
+              <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
             </div>
             <div class="field">
               <label for="taskAssignee">担当者</label>
@@ -902,7 +979,6 @@
               <input id="taskEstimate" name="estimatedMinutes" type="number" min="0" step="5" value="${escapeAttr(value.estimatedMinutes)}">
             </div>
           </div>
-          <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
           ${renderRecurrenceFields(value.recurrence)}
           <div class="field">
             <label for="taskMemos">関連メモ</label>
@@ -913,7 +989,6 @@
             このタスクではメモ要約を表示
           </label>
           <div class="form-actions">
-            <button class="text-button" type="button" data-action="close-dialog">キャンセル</button>
             <button class="solid-button" type="submit">保存</button>
           </div>
         </form>
@@ -925,6 +1000,7 @@
 
   function openMemoForm(memo = null) {
     const existing = memo ? normalizeMemo(memo) : null;
+    resetRecordingDraft();
     openSheet(`
       <div class="sheet">
         ${renderSheetHeader(existing ? "メモ編集" : "メモ追加", "走り書きから始めて、後で議題や決定事項を整えられます。")}
@@ -933,6 +1009,17 @@
             <label for="memoTitle">タイトル</label>
             <input id="memoTitle" name="title" value="${escapeAttr(existing?.title || "")}" autocomplete="off">
           </div>
+          <section class="memo-recording-panel">
+            <div class="section-head">
+              <h2 class="section-title">録音</h2>
+              <span class="recording-status" data-recording-status>録音待機中</span>
+            </div>
+            <div class="recording-bar">
+              <button class="ghost-button compact" type="button" data-action="start-recording">録音</button>
+              <button class="ghost-button compact" type="button" data-action="stop-recording" disabled>停止</button>
+            </div>
+            <div class="transcript-preview hidden" data-recording-transcript-preview aria-live="polite"></div>
+          </section>
           <div class="field">
             <label for="memoBody">本文</label>
             <textarea id="memoBody" name="body" required>${escapeHtml(existing?.body || "")}</textarea>
@@ -987,12 +1074,13 @@
             ${renderTaskPicker(existing?.taskIds || [])}
           </div>
           <div class="form-actions">
-            <button class="text-button" type="button" data-action="close-dialog">キャンセル</button>
             <button class="solid-button" type="submit">保存</button>
           </div>
         </form>
       </div>
     `);
+    updateTranscriptPreview("");
+    updateRecordingButtons();
   }
 
   function openPolicyForm(policy = null) {
@@ -1042,7 +1130,6 @@
             <textarea id="policyNotes" name="notes">${escapeHtml(existing.notes || "")}</textarea>
           </div>
           <div class="form-actions">
-            <button class="text-button" type="button" data-action="close-dialog">キャンセル</button>
             <button class="solid-button" type="submit">保存</button>
           </div>
         </form>
@@ -1187,31 +1274,50 @@
     const target = form.querySelector("#priorityAvailability");
     if (!target) return;
     const date = String(form.elements.actionDate?.value || "");
+    if (!date && form.elements.priority) form.elements.priority.value = "NONE";
     const selectedPriority = String(form.elements.priority?.value || "");
     const currentId = form.dataset.id || "";
-    target.innerHTML = renderPriorityAvailability(date, currentId, selectedPriority);
+    target.innerHTML = renderPrioritySelector(date, currentId, selectedPriority, [], { includeNone: true });
   }
 
-  function renderPriorityAvailability(date, excludeId = "", selectedPriority = "", extraExcludeIds = []) {
+  function renderPrioritySelector(date, excludeId = "", selectedPriority = "", extraExcludeIds = [], options = {}) {
+    const includeNone = options.includeNone === true;
     if (!date) {
-      return `<span class="availability-note">実施日を選ぶと、その日の優先度の空き状況を表示します。</span>`;
+      const noneSelected = !selectedPriority || selectedPriority === "NONE";
+      return `
+        <div class="availability-row availability-row-empty">
+          ${includeNone ? renderPrioritySlotButton("NONE", "実施日なし", "未設定", noneSelected, false, 0) : ""}
+          <span class="availability-note">実施日を選ぶと、その日の優先度の空き状況を表示します。</span>
+        </div>
+      `;
     }
     const excludeIds = [excludeId].concat(extraExcludeIds).filter(Boolean);
     const rows = ["P1", "P2", "P3", "SUB"].map((priority) => {
       const occupants = getPriorityOccupants(date, priority, excludeIds);
       const occupied = occupants.length && priority !== "SUB";
-      const classes = [
-        "availability-pill",
-        occupied ? "is-occupied" : "is-open",
-        selectedPriority === priority ? "is-selected" : ""
-      ].filter(Boolean).join(" ");
       const label = priorityMeta[priority].label;
       const detail = priority === "SUB"
         ? `${occupants.length}件`
         : (occupied ? truncate(occupants[0].title || "登録済み", 16) : "空き");
-      return `<span class="${classes}"><strong>${label}</strong><small>${escapeHtml(detail)}</small></span>`;
+      return renderPrioritySlotButton(priority, label, detail, selectedPriority === priority, occupied, occupants.length);
     }).join("");
-    return `<div class="availability-row">${rows}</div>`;
+    const none = includeNone ? renderPrioritySlotButton("NONE", "未設定", "優先度なし", selectedPriority === "NONE", false, 0) : "";
+    return `<div class="availability-row">${rows}${none}</div>`;
+  }
+
+  function renderPrioritySlotButton(priority, label, detail, selectedPriority, occupied, count) {
+    const classes = [
+      "availability-pill",
+      occupied ? "is-occupied" : "is-open",
+      selectedPriority ? "is-selected" : "",
+      priority === "NONE" ? "is-none" : ""
+    ].filter(Boolean).join(" ");
+    return `
+      <button class="${classes}" type="button" data-action="select-priority-slot" data-priority="${priority}" aria-pressed="${selectedPriority ? "true" : "false"}">
+        <strong>${escapeHtml(label)}</strong>
+        <small>${escapeHtml(detail)}${occupied && count > 1 ? ` ほか${count - 1}` : ""}</small>
+      </button>
+    `;
   }
 
   async function handleTaskSubmit(form) {
@@ -1273,12 +1379,12 @@
       <div class="sheet">
         ${renderSheetHeader("優先度の入れ替え", `${formatShortDate(task.actionDate)} の ${priorityMeta[task.priority].label} には既存タスクがあります。`)}
         <div class="conflict-compare">
-          <section class="conflict-panel conflict-new">
+          <section class="conflict-panel conflict-task-panel conflict-new">
             <span class="conflict-label">入れたいタスク</span>
             <strong>${escapeHtml(task.title)}</strong>
             <span>${formatConflictSlot(task)}</span>
           </section>
-          <section class="conflict-panel conflict-existing">
+          <section class="conflict-panel conflict-task-panel conflict-existing">
             <span class="conflict-label">${existingLabel}タスク</span>
             ${conflicts.map((item) => `
               <div class="conflict-existing-item">
@@ -1289,14 +1395,14 @@
           </section>
         </div>
         <div class="conflict-actions">
-          <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="new-available">
+          <button class="choice-button conflict-action-button" type="button" data-action="resolve-conflict" data-mode="new-available">
             <strong>新規を空き枠へ</strong>
             <span>${priorityMeta[availablePriority].label} に新規タスクを保存する</span>
           </button>
           <section class="conflict-move-box">
-            <button class="choice-button" type="button" data-action="resolve-conflict" data-mode="move-existing">
+            <button class="choice-button conflict-action-button" type="button" data-action="resolve-conflict" data-mode="move-existing">
               <strong>既存を移動して入れる</strong>
-              <span>既存タスクを下の移動先へ移し、新規タスクを選択中の枠へ入れる</span>
+              <span>既存タスクを下の空き状況で選んだ枠へ移し、新規タスクを選択中の枠へ入れる</span>
             </button>
             <div class="field-inline task-date-row">
               <div class="field">
@@ -1304,15 +1410,13 @@
                 <input id="conflictMoveDate" type="date" value="${escapeAttr(task.actionDate)}">
               </div>
               <div class="field">
-                <label for="conflictMovePriority">移動先優先度</label>
-                <select id="conflictMovePriority">
-                  ${["P1", "P2", "P3", "SUB"].map((priority) => `<option value="${priority}"${selected(priority, availablePriority)}>${priorityMeta[priority].label}</option>`).join("")}
-                </select>
+                <label>移動先の空き状況</label>
+                <input id="conflictMovePriority" type="hidden" value="${escapeAttr(availablePriority)}">
+                <div id="conflictMoveAvailability" class="priority-availability"></div>
               </div>
             </div>
-            <div id="conflictMoveAvailability" class="priority-availability"></div>
           </section>
-          <button class="choice-button" type="button" data-action="back-to-task-form">
+          <button class="choice-button conflict-back-button" type="button" data-action="back-to-task-form">
             <strong>戻って修正</strong>
             <span>日付や優先度を自分で選び直す</span>
           </button>
@@ -1353,7 +1457,7 @@
     const date = document.getElementById("conflictMoveDate")?.value || "";
     const priority = document.getElementById("conflictMovePriority")?.value || "";
     const excludeIds = app.pendingConflict.conflicts.map((item) => item.id).concat(app.pendingConflict.task.id);
-    if (target) target.innerHTML = renderPriorityAvailability(date, "", priority, excludeIds);
+    if (target) target.innerHTML = renderPrioritySelector(date, "", priority, excludeIds);
   }
 
   function reopenPendingTaskForm() {
@@ -1413,10 +1517,13 @@
   }
 
   async function handleMemoSubmit(form) {
+    await ensureRecordingStopped();
     const data = new FormData(form);
     const id = form.dataset.id || uid("memo");
     const existing = findById(app.state.memos, id);
     const body = String(data.get("body") || "").trim();
+    const transcript = appendText(String(data.get("transcript") || "").trim(), app.pendingRecordingTranscript.trim()).trim();
+    const recordings = [...(existing?.recordings || []), ...app.pendingRecordings];
     const now = nowIso();
     const memo = normalizeMemo({
       ...existing,
@@ -1426,13 +1533,13 @@
       agenda: String(data.get("agenda") || "").trim(),
       decisions: String(data.get("decisions") || "").trim(),
       nextActions: String(data.get("nextActions") || "").trim(),
-      transcript: String(data.get("transcript") || "").trim(),
+      transcript,
       dueDate: String(data.get("dueDate") || ""),
       priority: String(data.get("priority") || "NONE"),
       departmentId: String(data.get("departmentId") || ""),
       projectId: String(data.get("projectId") || ""),
       taskIds: data.getAll("taskIds").map(String),
-      recordings: existing?.recordings || [],
+      recordings,
       createdAt: existing?.createdAt || now,
       updatedAt: now
     });
@@ -1691,6 +1798,7 @@
     [...form.elements.memoIds.options].forEach((option) => {
       option.selected = option.value === memo.id;
     });
+    updateTaskPriorityPreview(form);
   }
 
   async function saveQuickMemo() {
@@ -1732,7 +1840,7 @@
       app.recordingChunks = [];
       app.mediaRecorder = new MediaRecorder(app.recordingStream);
       app.recordingStartedAt = Date.now();
-      const textarea = document.getElementById("quickMemoText");
+      const textarea = document.getElementById("quickMemoText") || document.getElementById("memoBody") || document.getElementById("memoTranscript");
       app.recordingBaseText = textarea?.value.trim() || "";
       app.recordingTranscript = "";
       app.recordingInterimTranscript = "";
@@ -1816,7 +1924,7 @@
       updateRecordingButtons(app.mediaRecorder ? "録音中（文字起こし非対応）" : "");
       return false;
     }
-    const textarea = document.getElementById("quickMemoText");
+    const textarea = document.getElementById("quickMemoText") || document.getElementById("memoBody") || document.getElementById("memoTranscript");
     const recognition = new SpeechRecognition();
     recognition.lang = "ja-JP";
     recognition.continuous = true;
@@ -1882,17 +1990,35 @@
     document.querySelectorAll('[data-action="stop-recording"]').forEach((button) => { button.disabled = !isRecording; });
     document.querySelectorAll('[data-action="start-transcription"]').forEach((button) => { button.disabled = isRecognizing; });
     document.querySelectorAll('[data-action="stop-transcription"]').forEach((button) => { button.disabled = !isRecognizing; });
-    const statusEl = document.getElementById("recordingStatus");
     const hasPendingRecording = app.pendingRecordings.length || app.pendingRecordingTranscript.trim();
-    if (statusEl) statusEl.textContent = status || (isRecording ? "録音中 / 文字起こし中" : (hasPendingRecording ? "録音停止済み（保存待ち）" : "録音待機中"));
+    document.querySelectorAll("[data-recording-status]").forEach((statusEl) => {
+      statusEl.textContent = status || (isRecording ? "録音中 / 文字起こし中" : (hasPendingRecording ? "録音停止済み（保存待ち）" : "録音待機中"));
+    });
   }
 
   function updateTranscriptPreview(text) {
-    const preview = document.getElementById("recordingTranscriptPreview");
-    if (!preview) return;
     const clean = String(text || "").trim();
-    preview.textContent = clean ? `文字起こし: ${truncate(clean, 260)}` : "";
-    preview.classList.toggle("hidden", !clean);
+    document.querySelectorAll("[data-recording-transcript-preview]").forEach((preview) => {
+      preview.textContent = clean ? `文字起こし: ${truncate(clean, 260)}` : "";
+      preview.classList.toggle("hidden", !clean);
+    });
+  }
+
+  function resetRecordingDraft() {
+    stopTranscription({ abort: true });
+    stopRecordingStream();
+    app.mediaRecorder = null;
+    app.recordingChunks = [];
+    app.recordingStartedAt = 0;
+    app.recordingBaseText = "";
+    app.recordingTranscript = "";
+    app.recordingInterimTranscript = "";
+    app.pendingRecordings = [];
+    app.pendingRecordingTranscript = "";
+    app.recordingStopPromise = null;
+    app.recordingStopResolve = null;
+    updateTranscriptPreview("");
+    updateRecordingButtons();
   }
 
   function stopRecordingStream() {
@@ -1998,7 +2124,6 @@
             ${renderDeletedItems()}
           </section>
           <div class="form-actions">
-            <button class="text-button" type="button" data-action="close-dialog">閉じる</button>
             <button class="solid-button" type="submit">設定を保存</button>
           </div>
         </form>
@@ -2097,7 +2222,6 @@
             <textarea id="importText" name="importText" required placeholder="JSON / CSV / Microsoft To Do のエクスポートテキスト"></textarea>
           </div>
           <div class="form-actions">
-            <button class="text-button" type="button" data-action="close-dialog">キャンセル</button>
             <button class="solid-button" type="submit">取り込む</button>
           </div>
         </form>
@@ -2110,7 +2234,7 @@
     const result = await importText(text);
     closeDialogs();
     render();
-    showToast(`${result.tasks}件のタスク、${result.memos}件のメモを取り込みました。`);
+    showToast(`${result.tasks}件のタスク、${result.memos}件のメモ、${result.policies || 0}件の方針を取り込みました。`);
   }
 
   async function runImportFromDialog() {
@@ -2124,7 +2248,7 @@
     if (textarea) textarea.value = "";
     closeDialogs();
     render();
-    showToast(`${result.tasks}件のタスク、${result.memos}件のメモを取り込みました。`);
+    showToast(`${result.tasks}件のタスク、${result.memos}件のメモ、${result.policies || 0}件の方針を取り込みました。`);
   }
 
   async function applyBundledTaskImport() {
@@ -2146,9 +2270,10 @@
       const imported = importJson(JSON.stringify(payload));
       if (!imported.tasks.length) return;
       replaceTasksFromImport(imported.tasks, importId);
+      upsertPoliciesFromImport(imported.policies);
       app.state.settings.appliedTaskImportId = importId;
       await saveState();
-      showToast(`${imported.tasks.length}件のタスクを指定ファイルで上書きしました。`);
+      showToast(`${imported.tasks.length}件のタスクを指定ファイルで上書きし、${imported.policies.length}件の方針を同期しました。`);
     } catch {
       // 同梱インポートは初期投入用。失敗しても通常利用は止めない。
     }
@@ -2169,9 +2294,9 @@
     const now = nowIso();
     app.state.tasks.push(...normalizeImportedTasks(imported.tasks, now));
     imported.memos.forEach((memo) => app.state.memos.push(normalizeMemo({ ...memo, id: uid("memo"), createdAt: now, updatedAt: now })));
-    imported.policies.forEach((policy) => app.state.policies.push({ ...policy, id: uid("policy"), createdAt: now, updatedAt: now }));
+    upsertPoliciesFromImport(imported.policies, now);
     await saveState();
-    return { tasks: imported.tasks.length, memos: imported.memos.length };
+    return { tasks: imported.tasks.length, memos: imported.memos.length, policies: imported.policies.length };
   }
 
   function replaceTasksFromImport(tasks, importId) {
@@ -2189,6 +2314,31 @@
       if (!memo.taskIds?.length) return;
       memo.taskIds = [];
       memo.updatedAt = now;
+    });
+  }
+
+  function upsertPoliciesFromImport(policies, now = nowIso()) {
+    policies.forEach((policy) => {
+      const normalized = {
+        ...policy,
+        id: policy.id || uid("policy"),
+        title: policy.title || "方針",
+        type: policy.type || "方針",
+        periodStart: policy.periodStart || "",
+        periodEnd: policy.periodEnd || "",
+        departmentId: policy.departmentId || "",
+        background: policy.background || "",
+        policy: policy.policy || "",
+        actions: policy.actions || "",
+        notes: policy.notes || "",
+        taskIds: Array.isArray(policy.taskIds) ? policy.taskIds : [],
+        memoIds: Array.isArray(policy.memoIds) ? policy.memoIds : [],
+        createdAt: policy.createdAt || now,
+        updatedAt: now
+      };
+      const existing = app.state.policies.find((item) => item.title === normalized.title && item.type === normalized.type);
+      if (existing) upsertById(app.state.policies, { ...existing, ...normalized, id: existing.id, createdAt: existing.createdAt || normalized.createdAt });
+      else app.state.policies.push(normalized);
     });
   }
 
@@ -2217,6 +2367,7 @@
       ...task,
       id: uid("task"),
       status: task.status || "active",
+      completedAt: task.status === "completed" ? (task.completedAt || now) : (task.completedAt || null),
       createdAt: now,
       updatedAt: now
     }));
@@ -2233,6 +2384,8 @@
         actionDate: toDateInputValueFromUnknown(task.actionDate || task.date || task.実施日),
         dueDate: toDateInputValueFromUnknown(task.dueDate || task.dl || task.DL || task.期限日),
         priority: normalizePriority(task.priority || task.優先度),
+        status: task.status || task.状態 || "active",
+        completedAt: task.completedAt || null,
         departmentId: matchDepartmentId(task.department || task.departmentName || task.部門),
         projectId: matchProjectId(task.project || task.projectName || task.プロジェクト)
       })).filter((task) => task.title),
@@ -2248,7 +2401,17 @@
         departmentId: matchDepartmentId(memo.department || memo.departmentName || memo.部門),
         projectId: matchProjectId(memo.project || memo.projectName || memo.プロジェクト)
       })).filter((memo) => memo.body || memo.title),
-      policies: source.policies || []
+      policies: (source.policies || []).map((policy) => ({
+        title: policy.title || policy.name || policy.タイトル || "方針",
+        type: policy.type || policy.種別 || "方針",
+        periodStart: toDateInputValueFromUnknown(policy.periodStart || policy.start || policy.開始),
+        periodEnd: toDateInputValueFromUnknown(policy.periodEnd || policy.end || policy.終了),
+        departmentId: matchDepartmentId(policy.department || policy.departmentName || policy.部門),
+        background: policy.background || policy.背景 || "",
+        policy: policy.policy || policy.body || policy.content || policy.方針 || "",
+        actions: policy.actions || policy.やること || "",
+        notes: policy.notes || policy.注意点 || ""
+      })).filter((policy) => policy.title || policy.policy)
     };
   }
 
@@ -2274,12 +2437,22 @@
 
   function importTodoText(text) {
     const tasks = [];
+    const policies = [];
     let current = null;
     text.split(/\r?\n/).forEach((line) => {
-      const taskMatch = line.match(/^\s*[◯○]\s*(.+)$/);
+      const taskMatch = line.match(/^\s*([◯○✔✓])\s*(.+)$/);
       const childMatch = line.match(/^\s*[◦・]\s*(.+)$/);
       if (taskMatch) {
-        current = parseTodoLine(taskMatch[1]);
+        current = parseTodoLine(taskMatch[2]);
+        if (looksLikePolicyLine(current.title)) {
+          policies.push(policyFromTodoLine(current));
+          current = null;
+          return;
+        }
+        if (/[✔✓]/.test(taskMatch[1])) {
+          current.status = "completed";
+          current.completedAt = nowIso();
+        }
         tasks.push(current);
         return;
       }
@@ -2287,7 +2460,7 @@
         current.description = `${current.description ? `${current.description}\n` : ""}${childMatch[1].trim()}`;
       }
     });
-    return { tasks, memos: [], policies: [] };
+    return { tasks, memos: [], policies };
   }
 
   function parseTodoLine(rawTitle) {
@@ -2310,6 +2483,26 @@
       actionDate,
       dueDate,
       priority
+    };
+  }
+
+  function looksLikePolicyLine(title) {
+    return /方針|で進める|判断材料|商売計画|売場/.test(String(title || ""));
+  }
+
+  function policyFromTodoLine(item) {
+    const text = item.title || "";
+    const split = text.match(/^(.+?方針)\s+(.+)$/u);
+    const title = split ? split[1].trim() : text;
+    const policy = split ? split[2].trim() : text;
+    return {
+      title,
+      type: /在庫|倉庫/.test(text) ? "在庫" : (/エンド|売場|フェイス/.test(text) ? "売場" : "方針"),
+      periodStart: item.actionDate || "",
+      periodEnd: /今後2か月/.test(text) ? addMonths(item.actionDate || todayIso(), 2) : "",
+      policy,
+      actions: "",
+      notes: ""
     };
   }
 
@@ -2425,6 +2618,10 @@
   }
 
   function closeDialogs() {
+    if (entityDialog.open && entityDialog.querySelector("#memoForm")) {
+      stopAudioCaptureImmediately();
+      resetRecordingDraft();
+    }
     if (entityDialog.open) entityDialog.close();
     if (conflictDialog.open) conflictDialog.close();
   }
@@ -2444,6 +2641,22 @@
   function renderCalendarFilterOptions(current) {
     return `
       <option value="all"${selected(current, "all")}>すべて</option>
+      <option value="no-dept"${selected(current, "no-dept")}>部門未設定</option>
+      ${app.state.departments.map((department) =>
+        `<option value="dept:${escapeAttr(department.id)}"${selected(current, `dept:${department.id}`)}>部門: ${escapeHtml(department.name)}</option>`
+      ).join("")}
+      ${app.state.projects.map((project) =>
+        `<option value="project:${escapeAttr(project.id)}"${selected(current, `project:${project.id}`)}>PJ: ${escapeHtml(project.name)}</option>`
+      ).join("")}
+    `;
+  }
+
+  function renderEntryFilterOptions(current) {
+    return `
+      <option value="all"${selected(current, "all")}>すべて</option>
+      <option value="today"${selected(current, "today")}>今日</option>
+      <option value="no-date"${selected(current, "no-date")}>実施日なし</option>
+      <option value="due"${selected(current, "due")}>DLあり</option>
       <option value="no-dept"${selected(current, "no-dept")}>部門未設定</option>
       ${app.state.departments.map((department) =>
         `<option value="dept:${escapeAttr(department.id)}"${selected(current, `dept:${department.id}`)}>部門: ${escapeHtml(department.name)}</option>`
@@ -2671,6 +2884,38 @@
     return true;
   }
 
+  function matchesEntryItem(item, kind, filter = "all", query = "") {
+    if (!matchesEntryFilter(item, kind, filter)) return false;
+    const normalizedQuery = normalizeSearchText(query);
+    if (!normalizedQuery) return true;
+    return normalizeSearchText(entrySearchText(item, kind)).includes(normalizedQuery);
+  }
+
+  function matchesEntryFilter(item, kind, filter = "all") {
+    if (!filter || filter === "all") return true;
+    if (filter === "today") {
+      if (kind === "task") return item.actionDate === todayIso() || item.dueDate === todayIso();
+      if (kind === "memo") return item.dueDate === todayIso();
+      if (kind === "policy") return isDateInPolicy(todayIso(), item);
+    }
+    if (filter === "no-date") return kind === "task" ? !item.actionDate : true;
+    if (filter === "due") return kind === "task" || kind === "memo" ? Boolean(item.dueDate) : false;
+    if (filter === "no-dept") return !item.departmentId;
+    if (filter.startsWith("dept:")) return item.departmentId === filter.slice(5);
+    if (filter.startsWith("project:")) return kind !== "policy" && item.projectId === filter.slice(8);
+    return true;
+  }
+
+  function entrySearchText(item, kind) {
+    if (kind === "task") {
+      return [item.title, item.description, item.assignee, item.actionDate, item.dueDate].filter(Boolean).join(" ");
+    }
+    if (kind === "memo") {
+      return [item.title, item.body, item.agenda, item.decisions, item.nextActions, item.transcript].filter(Boolean).join(" ");
+    }
+    return [item.title, item.type, item.background, item.policy, item.actions, item.notes].filter(Boolean).join(" ");
+  }
+
   function matchesCalendarPolicyFilter(policy, filter = "all") {
     if (!filter || filter === "all") return true;
     if (filter === "no-dept") return !policy.departmentId;
@@ -2780,6 +3025,13 @@
   function dateFromMonthDay(month, day) {
     const year = new Date().getFullYear();
     return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  function addMonths(isoDate, amount) {
+    const date = new Date(`${isoDate}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return "";
+    date.setMonth(date.getMonth() + amount);
+    return toDateInputValue(date);
   }
 
   function addDays(isoDate, amount) {

@@ -1,10 +1,10 @@
-const CACHE_NAME = "claris-cache-v7";
+const CACHE_NAME = "claris-cache-v8";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
-  "./data/current-todo-tasks-2026-05-15.json",
+  "./data/current-todo-tasks-2026-05-16.json",
   "./manifest.webmanifest",
   "./icons/claris-icon.svg",
   "./icons/icon-180.png",
