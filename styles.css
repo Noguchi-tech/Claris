@@ -946,6 +946,12 @@ audio {
   background: var(--period-color, var(--blue));
 }
 
+.day-due-row {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
 .day-priority-row {
   display: flex;
   align-items: center;
@@ -1396,9 +1402,24 @@ audio {
 
 .list-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
+}
+
+.list-row[data-row="project"] {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.list-row-order {
+  display: flex;
+  gap: 4px;
+}
+
+.order-button {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
 }
 
 .deleted-list {
@@ -1765,4 +1786,34 @@ audio {
   .bottom-nav button {
     font-size: 10px;
   }
+}
+
+.availability-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.availability-row-empty {
+  grid-template-columns: 1fr;
+}
+
+.availability-pill {
+  min-height: 58px;
+  align-content: start;
+  overflow: hidden;
+}
+
+.availability-pill strong,
+.availability-pill small {
+  width: 100%;
+  max-width: 100%;
+}
+
+.availability-pill small {
+  display: -webkit-box;
+  min-height: 2.5em;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }

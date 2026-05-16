@@ -9,6 +9,7 @@
   const SINGLE_SLOT_PRIORITIES = ["P1", "P2", "P3"];
   const PERIOD_LINE_CLASS_COUNT = 6;
   const CLASSIFICATION_LABEL = "分類";
+  const ADD_DEPARTMENT_VALUE = "__add_department__";
 
   const priorityMeta = {
     P1: { label: "最優先", className: "priority-p1" },
@@ -21,7 +22,7 @@
     all: "すべて",
     task: "タスク",
     memo: "メモ",
-    policy: "方針"
+    policy: "方針・施策"
   };
 
   const tabs = {
@@ -308,7 +309,7 @@
       periodEnd: policy.periodEnd || "",
       departmentId: policy.departmentId || "",
       background: policy.background || "",
-      policy: policy.policy || "",
+      policy: policy.policy || policy.content || "",
       actions: policy.actions || "",
       notes: policy.notes || "",
       taskIds: Array.isArray(policy.taskIds) ? policy.taskIds : [],
@@ -560,19 +561,17 @@
       <button class="${classes}" type="button" data-action="select-day" data-date="${iso}">
         <span class="day-head">
           <span class="day-number">${day.date.getDate()}</span>
-          ${renderCalendarDayBadges(iso, dueTasks.length, filter)}
+          ${renderCalendarDayBadges(iso, filter)}
         </span>
         ${renderDayPrioritySummary(actionTasks)}
+        ${renderCalendarDueBadge(dueTasks.length)}
       </button>
     `;
   }
 
-  function renderCalendarDayBadges(isoDate, dueCount, filter) {
+  function renderCalendarDayBadges(isoDate, filter) {
     const periods = getCalendarPeriodsForDate(isoDate, filter).slice(0, 3);
     const badges = [];
-    if (dueCount) {
-      badges.push(`<span class="day-badge day-badge-due" title="DL ${dueCount}件">DL${dueCount > 1 ? dueCount : ""}</span>`);
-    }
     periods.forEach((period) => {
       const classes = [
         "day-badge",
@@ -582,6 +581,15 @@
       badges.push(`<span class="${classes}" title="${escapeAttr(`${period.type}: ${period.title}`)}">${escapeHtml(compactPeriodType(period.type))}</span>`);
     });
     return badges.length ? `<span class="day-badge-stack" aria-label="日付の予定">${badges.join("")}</span>` : "";
+  }
+
+  function renderCalendarDueBadge(dueCount) {
+    if (!dueCount) return "";
+    return `
+      <span class="day-due-row" aria-label="DL ${dueCount}件">
+        <span class="day-badge day-badge-due" title="DL ${dueCount}件">DL${dueCount > 1 ? dueCount : ""}</span>
+      </span>
+    `;
   }
 
   function compactPeriodType(type) {
@@ -686,14 +694,14 @@
           <div class="policy-focus-card" data-card-action="edit-policy" data-id="${escapeAttr(items[0].id)}" tabindex="0">
             <span class="policy-focus-label">${label}</span>
             <strong>${escapeHtml(items[0].title)}</strong>
-            ${items[0].policy ? `<span>${escapeHtml(truncate(items[0].policy, 46))}</span>` : ""}
+            ${getPolicyContent(items[0]) ? `<span>${escapeHtml(truncate(getPolicyContent(items[0]), 46))}</span>` : ""}
           </div>
         `).join("")}
         ${other.slice(0, 2).map((policy) => `
           <div class="policy-focus-card" data-card-action="edit-policy" data-id="${escapeAttr(policy.id)}" tabindex="0">
             <span class="policy-focus-label">${escapeHtml(policy.type || "方針")}</span>
             <strong>${escapeHtml(policy.title)}</strong>
-            ${policy.policy ? `<span>${escapeHtml(truncate(policy.policy, 46))}</span>` : ""}
+            ${getPolicyContent(policy) ? `<span>${escapeHtml(truncate(getPolicyContent(policy), 46))}</span>` : ""}
           </div>
         `).join("")}
       </section>
@@ -902,6 +910,7 @@
 
   function renderPolicyCard(policy) {
     const department = findById(app.state.departments, policy.departmentId);
+    const content = getPolicyContent(policy);
     return `
       <article class="policy-card" data-card-action="edit-policy" data-id="${escapeAttr(policy.id)}" tabindex="0">
         <div class="section-head">
@@ -913,7 +922,7 @@
           ${policy.periodEnd ? `<span class="tag">- ${formatShortDate(policy.periodEnd)}</span>` : ""}
           ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
         </div>
-        ${policy.policy ? `<p class="body-preview">${escapeHtml(truncate(policy.policy, 150))}</p>` : ""}
+        ${content ? `<p class="body-preview">${escapeHtml(truncate(content, 150))}</p>` : ""}
         <div class="card-actions">
           <button class="mini-button" type="button" data-action="edit-policy" data-id="${escapeAttr(policy.id)}">編集</button>
           <button class="mini-button" type="button" data-action="delete-policy" data-id="${escapeAttr(policy.id)}">削除</button>
@@ -981,6 +990,7 @@
     if (action === "run-import") await runImportFromDialog();
     if (action === "add-department") addSettingsRow("department");
     if (action === "add-project") addSettingsRow("project");
+    if (action === "move-settings-row") moveSettingsRow(button);
     if (action === "remove-settings-row") button.closest(".list-row")?.remove();
   }
 
@@ -1021,6 +1031,10 @@
   }
 
   async function handleChange(event) {
+    if (event.target.name === "departmentId") {
+      await handleDepartmentSelectChange(event.target);
+      return;
+    }
     if (event.target.id === "settingsImportFile") {
       await readImportFile(event.target);
       return;
@@ -1108,6 +1122,54 @@
     updateTaskPriorityPreview(form);
   }
 
+  async function handleDepartmentSelectChange(select) {
+    if (!(select instanceof HTMLSelectElement)) return;
+    if (select.value === ADD_DEPARTMENT_VALUE) {
+      await addDepartmentFromSelect(select);
+      return;
+    }
+    select.dataset.currentValue = select.value;
+  }
+
+  async function addDepartmentFromSelect(select) {
+    const previousValue = select.dataset.currentValue || "";
+    const enteredName = window.prompt("新しい分類名", "新しい分類");
+    if (enteredName === null) {
+      select.value = previousValue;
+      return;
+    }
+    const name = enteredName.trim() || "新しい分類";
+    const now = nowIso();
+    const department = {
+      id: uid("dept"),
+      name,
+      parentId: "",
+      sortOrder: app.state.departments.length + 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    app.state.departments.push(department);
+    await saveState();
+    refreshDepartmentSelects(select, department.id);
+    showToast("分類を追加しました。");
+  }
+
+  function refreshDepartmentSelects(activeSelect, activeValue) {
+    document.querySelectorAll('select[name="departmentId"]').forEach((select) => {
+      const current = select === activeSelect
+        ? activeValue
+        : normalizeDepartmentFormValue(select.value);
+      select.innerHTML = renderDepartmentOptions(current);
+      select.value = current;
+      select.dataset.currentValue = current;
+    });
+  }
+
+  function normalizeDepartmentFormValue(value) {
+    const text = String(value || "");
+    return text === ADD_DEPARTMENT_VALUE ? "" : text;
+  }
+
   function openAddForCurrentContext() {
     openAddChoice(defaultAddKind());
   }
@@ -1160,11 +1222,11 @@
           <div class="field-inline task-date-row">
             <div class="field">
               <label for="taskActionDate">実施</label>
-              <input id="taskActionDate" name="actionDate" type="date" value="${escapeAttr(value.actionDate)}">
+              <input id="taskActionDate" name="actionDate" type="date">
             </div>
             <div class="field">
               <label for="taskDueDate">DL</label>
-              <input id="taskDueDate" name="dueDate" type="date" value="${escapeAttr(value.dueDate)}">
+              <input id="taskDueDate" name="dueDate" type="date">
             </div>
           </div>
           <div class="field-inline">
@@ -1179,7 +1241,7 @@
             </div>
             <div class="field">
               <label for="taskDepartment">${CLASSIFICATION_LABEL}</label>
-              <select id="taskDepartment" name="departmentId">${renderDepartmentOptions(value.departmentId)}</select>
+              <select id="taskDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
             </div>
             <div class="field">
               <label for="taskProject">プロジェクト</label>
@@ -1205,8 +1267,20 @@
         </form>
       </div>
     `);
+    initializeTaskDateInputs(value);
     updateRecurrenceForm(document.getElementById("taskForm"));
     updateTaskPriorityPreview(document.getElementById("taskForm"));
+  }
+
+  function initializeTaskDateInputs(value) {
+    setResettableDateInput(document.getElementById("taskActionDate"), value.actionDate);
+    setResettableDateInput(document.getElementById("taskDueDate"), value.dueDate);
+  }
+
+  function setResettableDateInput(input, date) {
+    if (!input) return;
+    input.defaultValue = "";
+    input.value = date || "";
   }
 
   function openMemoForm(memo = null) {
@@ -1273,7 +1347,7 @@
             </div>
             <div class="field">
               <label for="memoDepartment">${CLASSIFICATION_LABEL}</label>
-              <select id="memoDepartment" name="departmentId">${renderDepartmentOptions(existing?.departmentId || "")}</select>
+              <select id="memoDepartment" name="departmentId" data-current-value="${escapeAttr(existing?.departmentId || "")}">${renderDepartmentOptions(existing?.departmentId || "")}</select>
             </div>
           </div>
           <div class="field">
@@ -1298,7 +1372,7 @@
     const existing = policy || {};
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader(policy ? "方針編集" : "方針追加", "タスクではない判断材料を残します。")}
+        ${renderSheetHeader(policy ? "方針・施策編集" : "方針・施策追加", "内容をまとめて残します。")}
         <form id="policyForm" class="form-grid" data-id="${escapeAttr(existing.id || "")}">
           <div class="field">
             <label for="policyTitle">タイトル</label>
@@ -1320,25 +1394,13 @@
               <input id="periodEnd" name="periodEnd" type="date" value="${escapeAttr(existing.periodEnd || "")}">
             </div>
           </div>
+            <div class="field">
+              <label for="policyDepartment">${CLASSIFICATION_LABEL}</label>
+            <select id="policyDepartment" name="departmentId" data-current-value="${escapeAttr(existing.departmentId || "")}">${renderDepartmentOptions(existing.departmentId || "")}</select>
+            </div>
           <div class="field">
-            <label for="policyDepartment">${CLASSIFICATION_LABEL}</label>
-            <select id="policyDepartment" name="departmentId">${renderDepartmentOptions(existing.departmentId || "")}</select>
-          </div>
-          <div class="field">
-            <label for="policyBackground">背景</label>
-            <textarea id="policyBackground" name="background">${escapeHtml(existing.background || "")}</textarea>
-          </div>
-          <div class="field">
-            <label for="policyText">方針</label>
-            <textarea id="policyText" name="policy">${escapeHtml(existing.policy || "")}</textarea>
-          </div>
-          <div class="field">
-            <label for="policyActions">やること</label>
-            <textarea id="policyActions" name="actions">${escapeHtml(existing.actions || "")}</textarea>
-          </div>
-          <div class="field">
-            <label for="policyNotes">注意点</label>
-            <textarea id="policyNotes" name="notes">${escapeHtml(existing.notes || "")}</textarea>
+            <label for="policyContent">内容</label>
+            <textarea id="policyContent" name="content">${escapeHtml(getPolicyContent(existing))}</textarea>
           </div>
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
@@ -1390,7 +1452,7 @@
     const items = [
       ["task", "タスク", "実施とDL"],
       ["memo", "メモ", "走り書き"],
-      ["policy", "方針", "判断材料"]
+      ["policy", "方針・施策", "内容"]
     ];
     return `
       <div class="choice-grid" aria-label="追加種別">
@@ -1545,7 +1607,7 @@
       actionDate: String(data.get("actionDate") || ""),
       dueDate: String(data.get("dueDate") || ""),
       priority: String(data.get("priority") || "NONE"),
-      departmentId: String(data.get("departmentId") || ""),
+      departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
       projectId: String(data.get("projectId") || ""),
       estimatedMinutes: Number(data.get("estimatedMinutes") || 0),
       memoIds: data.getAll("memoIds").map(String),
@@ -1747,7 +1809,7 @@
       transcript,
       dueDate: String(data.get("dueDate") || ""),
       priority: String(data.get("priority") || "NONE"),
-      departmentId: String(data.get("departmentId") || ""),
+      departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
       projectId: String(data.get("projectId") || ""),
       taskIds: data.getAll("taskIds").map(String),
       recordings,
@@ -1767,6 +1829,7 @@
     const id = form.dataset.id || uid("policy");
     const existing = findById(app.state.policies, id);
     const now = nowIso();
+    const content = String(data.get("content") || "").trim();
     upsertById(app.state.policies, {
       ...existing,
       id,
@@ -1774,11 +1837,11 @@
       type: normalizePolicyType(data.get("type") || "方針"),
       periodStart: String(data.get("periodStart") || ""),
       periodEnd: String(data.get("periodEnd") || ""),
-      departmentId: String(data.get("departmentId") || ""),
-      background: String(data.get("background") || "").trim(),
-      policy: String(data.get("policy") || "").trim(),
-      actions: String(data.get("actions") || "").trim(),
-      notes: String(data.get("notes") || "").trim(),
+      departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
+      background: "",
+      policy: content,
+      actions: "",
+      notes: "",
       taskIds: existing?.taskIds || [],
       memoIds: existing?.memoIds || [],
       createdAt: existing?.createdAt || now,
@@ -1787,7 +1850,7 @@
     await saveState();
     closeDialogs();
     render();
-    showToast("方針を保存しました。");
+    showToast("方針・施策を保存しました。");
   }
 
   async function toggleTask(id, date = "") {
@@ -2285,7 +2348,7 @@
   function openSettings() {
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader("設定", "設定は下部タブから外し、今日を中央に固定しています。")}
+        ${renderSheetHeader("設定", "")}
         <form id="settingsForm" class="settings-grid">
           <section class="settings-block">
             <label class="toolbar">
@@ -2374,6 +2437,10 @@
     return `
       <div class="list-row" data-row="department" data-id="${escapeAttr(department.id)}">
         <input name="departmentName" value="${escapeAttr(department.name)}" aria-label="分類名">
+        <div class="list-row-order" aria-label="分類の並び替え">
+          <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="up" aria-label="上へ">↑</button>
+          <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="down" aria-label="下へ">↓</button>
+        </div>
         <button class="mini-button" type="button" data-action="remove-settings-row">削除</button>
       </div>
     `;
@@ -2484,6 +2551,18 @@
     }
   }
 
+  function moveSettingsRow(button) {
+    const row = button.closest(".list-row");
+    const parent = row?.parentElement;
+    if (!row || !parent) return;
+    if (button.dataset.direction === "up" && row.previousElementSibling) {
+      parent.insertBefore(row, row.previousElementSibling);
+    }
+    if (button.dataset.direction === "down" && row.nextElementSibling) {
+      parent.insertBefore(row.nextElementSibling, row);
+    }
+  }
+
   async function applyBundledTaskImport() {
     try {
       const response = await fetch(BUNDLED_TASK_IMPORT_URL, { cache: "no-store" });
@@ -2588,7 +2667,7 @@
         periodEnd: policy.periodEnd || "",
         departmentId: policy.departmentId || "",
         background: policy.background || "",
-        policy: policy.policy || "",
+        policy: policy.policy || policy.content || "",
         actions: policy.actions || "",
         notes: policy.notes || "",
         taskIds: Array.isArray(policy.taskIds) ? policy.taskIds : [],
@@ -2905,7 +2984,7 @@
   function renderDepartmentOptions(current) {
     return `<option value="">未設定</option>${app.state.departments.map((department) =>
       `<option value="${escapeAttr(department.id)}"${selected(current, department.id)}>${escapeHtml(department.name)}</option>`
-    ).join("")}`;
+    ).join("")}<option value="${ADD_DEPARTMENT_VALUE}">＋ 新しい分類を追加</option>`;
   }
 
   function renderEntryFilterOptions(current) {
@@ -3170,7 +3249,7 @@
     if (kind === "memo") {
       return [item.title, item.body, item.agenda, item.decisions, item.nextActions, item.transcript].filter(Boolean).join(" ");
     }
-    return [item.title, item.type, item.background, item.policy, item.actions, item.notes].filter(Boolean).join(" ");
+    return [item.title, item.type, getPolicyContent(item)].filter(Boolean).join(" ");
   }
 
   function matchesCalendarPolicyFilter(policy, filter = "all") {
@@ -3205,7 +3284,7 @@
         start: policy.periodStart || policy.periodEnd,
         end: policy.periodEnd || policy.periodStart,
         type: normalizePolicyType(policy.type || "方針"),
-        summary: firstNonEmpty(policy.policy, policy.actions, policy.background, policy.notes, policy.title),
+        summary: firstNonEmpty(getPolicyContent(policy), policy.title),
         source: "policy",
         departmentId: policy.departmentId || "",
         projectId: ""
@@ -3228,6 +3307,14 @@
 
   function firstNonEmpty(...values) {
     return values.map((value) => String(value || "").trim()).find(Boolean) || "";
+  }
+
+  function getPolicyContent(policy) {
+    if (!policy) return "";
+    return [policy.policy, policy.background, policy.actions, policy.notes]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
   }
 
   function stableIndex(value, modulo) {
