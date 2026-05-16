@@ -1,4 +1,4 @@
-const CACHE_NAME = "claris-cache-v9";
+const CACHE_NAME = "claris-cache-v10";
 const ASSETS = [
   "./",
   "./index.html",
@@ -9,7 +9,8 @@ const ASSETS = [
   "./icons/claris-icon.svg",
   "./icons/icon-180.png",
   "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./icons/icon-512.png",
+  "./icons/today-tab-icon.png"
 ];
 
 self.addEventListener("install", (event) => {
