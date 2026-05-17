@@ -556,6 +556,12 @@ textarea {
   padding: 0;
   background: transparent;
   color: var(--ink);
+  outline: none;
+}
+
+.sheet-dialog:focus,
+.sheet-dialog:focus-visible {
+  outline: none;
 }
 
 .sheet-dialog::backdrop {
@@ -567,9 +573,9 @@ textarea {
   animation: backdrop-in 150ms ease-out both;
 }
 
-.sheet-dialog[open] .sheet {
-  animation: sheet-pop 190ms var(--ease-liquid) both;
-  transform-origin: 50% 8%;
+.sheet-dialog.is-launching[open] .sheet {
+  animation: sheet-pop 360ms var(--ease-liquid) both;
+  transform-origin: var(--sheet-origin-x, 50%) var(--sheet-origin-y, 8%);
 }
 
 .sheet {
@@ -1227,7 +1233,10 @@ audio {
 }
 
 .bottom-nav {
-  --nav-offset: calc(100% + 4px);
+  --nav-indicator-x: calc((100% - 14px) / 3 + 7px);
+  --nav-indicator-y: 7px;
+  --nav-indicator-width: calc((100% - 22px) / 3);
+  --nav-indicator-height: 58px;
   position: fixed;
   left: 50%;
   bottom: calc(10px + var(--safe-bottom));
@@ -1241,29 +1250,59 @@ audio {
   gap: 4px;
   padding: 7px;
   border: 1px solid rgba(36, 60, 56, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 12px 32px rgba(20, 25, 24, 0.16);
+  border-radius: 20px;
+  overflow: visible;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.64)),
+    rgba(255, 255, 255, 0.74);
+  backdrop-filter: blur(22px) saturate(1.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 12px 32px rgba(20, 25, 24, 0.16);
 }
 
-.bottom-nav::before {
+.bottom-nav::before,
+.bottom-nav::after {
   content: "";
   position: absolute;
   z-index: 0;
-  top: 7px;
-  bottom: 7px;
-  left: 7px;
-  width: calc((100% - 22px) / 3);
-  border-radius: 8px;
-  background: var(--green-soft);
-  box-shadow: 0 8px 20px rgba(31, 52, 48, 0.12);
-  transform: translateX(var(--nav-offset));
-  transition: transform 230ms var(--ease-liquid), background-color 150ms ease;
+  top: 0;
+  left: 0;
+  width: var(--nav-indicator-width);
+  height: var(--nav-indicator-height);
+  border-radius: 999px;
+  pointer-events: none;
+  transform: translate3d(var(--nav-indicator-x), var(--nav-indicator-y), 0);
+  will-change: transform, width, height;
 }
 
-.bottom-nav.is-today-active::before {
-  opacity: 0;
+.bottom-nav::before {
+  border: 1px solid rgba(31, 52, 48, 0.16);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(227, 235, 231, 0.54) 48%, rgba(255, 255, 255, 0.62)),
+    rgba(227, 235, 231, 0.66);
+  backdrop-filter: blur(14px) saturate(1.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    inset 0 -10px 18px rgba(31, 52, 48, 0.08),
+    0 13px 27px rgba(31, 52, 48, 0.17);
+  transition:
+    transform 430ms cubic-bezier(0.17, 1.38, 0.28, 1),
+    width 430ms cubic-bezier(0.17, 1.38, 0.28, 1),
+    height 430ms cubic-bezier(0.17, 1.38, 0.28, 1),
+    background-color 190ms ease;
+}
+
+.bottom-nav::after {
+  opacity: 0.42;
+  background: rgba(255, 255, 255, 0.54);
+  filter: blur(10px);
+  transform: translate3d(var(--nav-indicator-x), var(--nav-indicator-y), 0) scaleX(0.82) scaleY(0.72);
+  transition:
+    transform 560ms cubic-bezier(0.15, 1, 0.2, 1),
+    width 520ms cubic-bezier(0.15, 1, 0.2, 1),
+    height 520ms cubic-bezier(0.15, 1, 0.2, 1),
+    opacity 180ms ease;
 }
 
 .bottom-nav button {
@@ -1299,10 +1338,12 @@ audio {
 }
 
 .bottom-nav .today-tab.is-active {
-  color: #fff;
-  border-color: var(--green);
-  background: var(--green);
-  box-shadow: 0 14px 28px rgba(31, 52, 48, 0.24);
+  color: var(--green);
+  border-color: transparent;
+  background: transparent;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
 }
 
 .nav-icon {
@@ -1465,19 +1506,34 @@ audio {
 @keyframes sheet-pop {
   0% {
     opacity: 0;
-    filter: blur(5px);
-    transform: translateY(14px) scale(0.96);
+    filter: blur(10px) saturate(1.18);
+    clip-path: inset(46% 46% 46% 46% round 999px);
+    transform:
+      translate3d(
+        calc(var(--sheet-launch-x, 0px) * 0.42),
+        calc(var(--sheet-launch-y, 18px) * 0.42),
+        0
+      )
+      scale(0.72, 0.56);
   }
 
-  68% {
+  54% {
     opacity: 1;
-    filter: blur(0);
-    transform: translateY(-2px) scale(1.01);
+    filter: blur(0) saturate(1.08);
+    clip-path: inset(0 0 0 0 round 8px);
+    transform:
+      translate3d(
+        calc(var(--sheet-launch-x, 0px) * -0.035),
+        calc(var(--sheet-launch-y, 0px) * -0.035),
+        0
+      )
+      scale(1.018, 1.012);
   }
 
   100% {
     opacity: 1;
     filter: blur(0);
+    clip-path: inset(0 0 0 0 round 8px);
     transform: translateY(0) scale(1);
   }
 }
@@ -1816,4 +1872,15 @@ audio {
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .bottom-nav::before,
+  .bottom-nav::after,
+  .sheet-dialog.is-launching[open] .sheet,
+  .sheet-dialog[open]::backdrop {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
 }

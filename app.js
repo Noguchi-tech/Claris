@@ -15,8 +15,7 @@
     P1: { label: "最優先", className: "priority-p1" },
     P2: { label: "2次優先", className: "priority-p2" },
     P3: { label: "3次優先", className: "priority-p3" },
-    SUB: { label: "サブタスク", className: "priority-sub" },
-    NONE: { label: "未設定", className: "priority-none" }
+    SUB: { label: "サブタスク", className: "priority-sub" }
   };
   const entryKindMeta = {
     all: "すべて",
@@ -78,6 +77,7 @@
     recordingStopPromise: null,
     recordingStopResolve: null,
     recognition: null,
+    dialogOrigin: null,
     toastTimer: 0
   };
 
@@ -359,13 +359,28 @@
   function renderNav(activeTab) {
     const navIndex = ["calendar", "today", "entries"].indexOf(activeTab);
     if (bottomNav) {
-      const offsets = ["0px", "calc(100% + 4px)", "calc(200% + 8px)"];
-      bottomNav.style.setProperty("--nav-offset", offsets[Math.max(navIndex, 0)] || offsets[1]);
+      bottomNav.dataset.activeTab = activeTab;
+      bottomNav.style.setProperty("--nav-active-index", String(Math.max(navIndex, 0)));
       bottomNav.classList.toggle("is-today-active", activeTab === "today");
     }
     document.querySelectorAll("[data-tab]").forEach((button) => {
       button.classList.toggle("is-active", button.dataset.tab === activeTab);
     });
+    updateNavIndicator(activeTab);
+    requestAnimationFrame(() => updateNavIndicator(activeTab));
+  }
+
+  function updateNavIndicator(activeTab = app.state?.ui?.activeTab || "today") {
+    if (!bottomNav) return;
+    const button = [...bottomNav.querySelectorAll("[data-tab]")].find((item) => item.dataset.tab === activeTab);
+    if (!button) return;
+    const navRect = bottomNav.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    if (!navRect.width || !buttonRect.width) return;
+    bottomNav.style.setProperty("--nav-indicator-x", `${buttonRect.left - navRect.left}px`);
+    bottomNav.style.setProperty("--nav-indicator-y", `${buttonRect.top - navRect.top}px`);
+    bottomNav.style.setProperty("--nav-indicator-width", `${buttonRect.width}px`);
+    bottomNav.style.setProperty("--nav-indicator-height", `${buttonRect.height}px`);
   }
 
   function normalizeActiveTab(tab) {
@@ -946,6 +961,7 @@
     if (!button) return;
     const action = button.dataset.action;
     const id = button.dataset.id;
+    setDialogOriginFromElement(button);
 
     if (action === "open-add") openAddForCurrentContext();
     if (action === "add-task-slot") openTaskForm(null, { actionDate: button.dataset.date, priority: button.dataset.priority });
@@ -1005,6 +1021,7 @@
     if (event.target.closest("button, a, input, textarea, select, label, audio, video")) return false;
     const card = event.target.closest("[data-card-action]");
     if (!card) return false;
+    setDialogOriginFromElement(card);
     return activateCard(card.dataset.cardAction, card.dataset.id);
   }
 
@@ -1084,6 +1101,7 @@
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     event.preventDefault();
+    if (event.submitter instanceof HTMLElement) setDialogOriginFromElement(event.submitter);
     if (form.id === "taskForm") await handleTaskSubmit(form);
     if (form.id === "memoForm") await handleMemoSubmit(form);
     if (form.id === "policyForm") await handlePolicySubmit(form);
@@ -1696,7 +1714,7 @@
         </div>
       </div>
     `;
-    conflictDialog.showModal();
+    showDialogWithLaunch(conflictDialog);
     updateConflictMovePreview();
   }
 
@@ -2951,7 +2969,47 @@
 
   function openSheet(html) {
     entityDialog.innerHTML = html;
-    if (!entityDialog.open) entityDialog.showModal();
+    showDialogWithLaunch(entityDialog);
+  }
+
+  function showDialogWithLaunch(dialog) {
+    dialog.classList.remove("is-launching");
+    if (!dialog.open) dialog.showModal();
+    applyDialogOrigin(dialog);
+    const sheet = dialog.querySelector(".sheet");
+    if (sheet) void sheet.offsetWidth;
+    dialog.classList.add("is-launching");
+  }
+
+  function setDialogOriginFromElement(element) {
+    const rect = element?.getBoundingClientRect?.();
+    if (!rect || (!rect.width && !rect.height)) return;
+    app.dialogOrigin = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2
+    };
+  }
+
+  function applyDialogOrigin(dialog) {
+    const sheet = dialog.querySelector(".sheet");
+    const origin = app.dialogOrigin;
+    if (!sheet || !origin) {
+      dialog.style.removeProperty("--sheet-origin-x");
+      dialog.style.removeProperty("--sheet-origin-y");
+      dialog.style.removeProperty("--sheet-launch-x");
+      dialog.style.removeProperty("--sheet-launch-y");
+      return;
+    }
+    const rect = sheet.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = clampNumber(((origin.x - rect.left) / rect.width) * 100, -18, 118, 50);
+    const y = clampNumber(((origin.y - rect.top) / rect.height) * 100, -12, 112, 8);
+    const dx = clampNumber(origin.x - (rect.left + rect.width / 2), -260, 260, 0);
+    const dy = clampNumber(origin.y - (rect.top + rect.height / 2), -340, 340, 0);
+    dialog.style.setProperty("--sheet-origin-x", `${x}%`);
+    dialog.style.setProperty("--sheet-origin-y", `${y}%`);
+    dialog.style.setProperty("--sheet-launch-x", `${dx}px`);
+    dialog.style.setProperty("--sheet-launch-y", `${dy}px`);
   }
 
   function renderSheetHeader(title, subtitle = "") {
