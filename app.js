@@ -5,12 +5,13 @@
   const DB_VERSION = 1;
   const STORE = "app";
   const STATE_KEY = "state";
-  const BUNDLED_TASK_IMPORT_URL = "./data/claris-master-2026-05-17.json";
+  const BUNDLED_TASK_IMPORT_URL = "./data/claris-master-2026-05-18.json";
   const SINGLE_SLOT_PRIORITIES = ["P1", "P2", "P3"];
   const PERIOD_LINE_CLASS_COUNT = 6;
   const CLASSIFICATION_LABEL = "分類";
+  const OPERATIONS_LABEL = "運営情報";
   const ADD_DEPARTMENT_VALUE = "__add_department__";
-  const defaultPolicyTypes = ["方針", "月次", "週次", "半期", "分類", "施策", "イベント", "在庫", "売場", "商売計画"];
+  const defaultPolicyTypes = ["方針", "月次", "週次", "半期", "分類", "施策", "イベント", "応援", "在庫", "売場", "商売計画"];
 
   const priorityMeta = {
     P1: { label: "最優先", className: "priority-p1" },
@@ -22,7 +23,7 @@
     all: "すべて",
     task: "タスク",
     memo: "メモ",
-    policy: "方針・施策"
+    policy: OPERATIONS_LABEL
   };
 
   const tabs = {
@@ -32,11 +33,13 @@
   };
   const legacyEntryTabs = new Set(["tasks", "memos", "policies"]);
   const weekdayLabels = ["日", "月", "火", "水", "木", "金", "土"];
+  const weekdayChoiceOrder = [1, 2, 3, 4, 5, 6, 0];
   const recurrenceLabels = {
     none: "なし",
     weekly: "週次",
-    "monthly-day": "毎月日付",
-    "monthly-nth": "第n曜日",
+    "monthly-day": "月次日付",
+    "monthly-nth": "月次曜日",
+    "monthly-start": "月初",
     "monthly-end": "月末",
     custom: "カスタム"
   };
@@ -79,6 +82,7 @@
     recordingStopResolve: null,
     recognition: null,
     dialogOrigin: null,
+    pendingPolicySave: null,
     isComposingText: false,
     toastTimer: 0
   };
@@ -175,6 +179,8 @@
         showCompleted: true,
         showLinkedMemos: true,
         policyTypes: [...defaultPolicyTypes],
+        llmProvider: "",
+        llmEndpoint: "",
         appliedTaskImportId: ""
       },
       ui: {
@@ -213,7 +219,7 @@
       memos: Array.isArray(saved.memos) ? saved.memos : [],
       policies: Array.isArray(saved.policies) ? saved.policies : [],
       departments: normalizeDepartments(saved.departments, base.departments),
-      projects: Array.isArray(saved.projects) ? saved.projects : [],
+      projects: [],
       deletedItems: Array.isArray(saved.deletedItems) ? saved.deletedItems : []
     };
     merged.tasks = merged.tasks.map(normalizeTask);
@@ -260,10 +266,10 @@
       priority: normalizeTaskPriority(task.priority),
       status: task.status || "active",
       departmentId: task.departmentId || "",
-      projectId: task.projectId || "",
+      projectId: "",
       estimatedMinutes: Number(task.estimatedMinutes || 0),
       memoIds: Array.isArray(task.memoIds) ? task.memoIds : [],
-      showLinkedMemos: task.showLinkedMemos !== false,
+      showLinkedMemos: true,
       recurrence: normalizeRecurrence(task.recurrence),
       completedDates: normalizeDateList(task.completedDates),
       generatedFromTaskId: task.generatedFromTaskId || "",
@@ -283,6 +289,7 @@
       weekdays: normalizeWeekdays(recurrence.weekdays),
       monthDay: clampNumber(recurrence.monthDay, 1, 31, 1),
       ordinal: clampNumber(recurrence.ordinal, 1, 5, 2),
+      nthOrdinals: normalizeNthOrdinals(recurrence.nthOrdinals || recurrence.ordinals || recurrence.ordinal),
       weekday: clampNumber(recurrence.weekday, 0, 6, 0),
       customDates: normalizeDateList(recurrence.customDates)
     };
@@ -298,9 +305,9 @@
       nextActions: memo.nextActions || "",
       transcript: memo.transcript || "",
       dueDate: "",
-      priority: normalizeTaskPriority(memo.priority),
+      priority: "SUB",
       departmentId: memo.departmentId || "",
-      projectId: memo.projectId || "",
+      projectId: "",
       taskIds: Array.isArray(memo.taskIds) ? memo.taskIds : [],
       recordings: Array.isArray(memo.recordings) ? memo.recordings : [],
       createdAt: memo.createdAt || nowIso(),
@@ -312,7 +319,7 @@
     return {
       ...policy,
       id: policy.id || uid("policy"),
-      title: policy.title || "方針",
+      title: policy.title || OPERATIONS_LABEL,
       type: normalizePolicyType(policy.type || "方針"),
       periodStart: policy.periodStart || "",
       periodEnd: policy.periodEnd || "",
@@ -406,9 +413,7 @@
     const buttonRect = button.getBoundingClientRect();
     if (!navRect.width || !buttonRect.width) return;
     bottomNav.style.setProperty("--nav-indicator-x", `${buttonRect.left - navRect.left}px`);
-    bottomNav.style.setProperty("--nav-indicator-y", `${buttonRect.top - navRect.top}px`);
     bottomNav.style.setProperty("--nav-indicator-width", `${buttonRect.width}px`);
-    bottomNav.style.setProperty("--nav-indicator-height", `${buttonRect.height}px`);
   }
 
   function normalizeActiveTab(tab) {
@@ -438,7 +443,7 @@
         ${renderStat("実施", todayTasks.length, "tasks")}
         ${renderStat("DL超過", overdue.length, "overdue")}
         ${renderStat("メモ", app.state.memos.length, "memos")}
-        ${renderStat("方針", relatedPolicies.length, "policies")}
+        ${renderStat("運営", relatedPolicies.length, "policies")}
       </section>
       ${overdue.length ? renderTaskSection("DL超過", overdue, "DLが過ぎています") : ""}
       ${["P1", "P2", "P3", "SUB"].map((priority) => {
@@ -448,11 +453,11 @@
       }).join("")}
       <section class="section">
         <div class="section-head">
-          <h2 class="section-title">今日に関係する方針</h2>
+          <h2 class="section-title">今日に関係する運営情報</h2>
           <span class="section-count">${relatedPolicies.length}件</span>
         </div>
         <div class="policy-list">
-          ${relatedPolicies.length ? relatedPolicies.map(renderPolicyCard).join("") : renderEmpty("今日の方針・施策はありません。", "方針を追加")}
+          ${relatedPolicies.length ? relatedPolicies.map(renderPolicyCard).join("") : renderEmpty("今日の運営情報はありません。", "運営情報を追加")}
         </div>
       </section>
       ${app.state.settings.showCompleted ? renderTaskSection("今日完了", completedToday, "今日完了したタスクはありません", "", date) : ""}
@@ -468,7 +473,6 @@
       if (filter === "no-date") return !task.actionDate;
       if (filter === "due") return Boolean(task.dueDate);
       if (filter.startsWith("dept:")) return task.departmentId === filter.slice(5);
-      if (filter.startsWith("project:")) return task.projectId === filter.slice(8);
       return true;
     }));
 
@@ -481,7 +485,6 @@
           <option value="no-date"${selected(filter, "no-date")}>実施日なし</option>
           <option value="due"${selected(filter, "due")}>DLあり</option>
           ${app.state.departments.map((department) => `<option value="dept:${escapeAttr(department.id)}"${selected(filter, `dept:${department.id}`)}>${CLASSIFICATION_LABEL}: ${escapeHtml(department.name)}</option>`).join("")}
-          ${app.state.projects.map((project) => `<option value="project:${escapeAttr(project.id)}"${selected(filter, `project:${project.id}`)}>PJ: ${escapeHtml(project.name)}</option>`).join("")}
         </select>
       </section>
       ${renderTaskSection("未完了", filtered, "該当するタスクはありません")}
@@ -535,11 +538,11 @@
       </section>` : ""}
       ${showPolicies ? `<section class="section">
         <div class="section-head">
-          <h2 class="section-title">方針</h2>
+          <h2 class="section-title">${OPERATIONS_LABEL}</h2>
           <span class="section-count">${policies.length}件</span>
         </div>
         <div class="policy-list">
-          ${policies.length ? policies.map(renderPolicyCard).join("") : renderEmpty("該当する方針はありません。", "方針を追加")}
+          ${policies.length ? policies.map(renderPolicyCard).join("") : renderEmpty("該当する運営情報はありません。", "運営情報を追加")}
         </div>
       </section>` : ""}
     `;
@@ -563,9 +566,9 @@
     view.innerHTML = `
       <section class="calendar-shell">
         <div class="calendar-header">
-          <button class="mini-button" type="button" data-action="month-prev">前月</button>
+          <button class="mini-button month-nav-button" type="button" data-action="month-prev" aria-label="月を戻す">&lt;</button>
           <h2 class="section-title">${current.year}年${current.month + 1}月</h2>
-          <button class="mini-button" type="button" data-action="month-next">翌月</button>
+          <button class="mini-button month-nav-button" type="button" data-action="month-next" aria-label="月を進める">&gt;</button>
         </div>
         ${renderCalendarPeriodSummary(selectedDate)}
         <div class="calendar-grid" aria-label="カレンダー">
@@ -575,7 +578,7 @@
         <div class="calendar-day-detail">
           <div class="section-head">
             <h2 class="section-title">${formatLongDate(selectedDate)}の予定</h2>
-            <button class="mini-button" type="button" data-action="add-task-slot" data-priority="P2" data-date="${selectedDate}">追加</button>
+            <span class="section-count">${selectedTasks.length + selectedPolicies.length}件</span>
           </div>
           ${selectedTasks.length ? `<div class="task-list">${selectedTasks.map((task) => renderTaskCard(task, selectedDate)).join("")}</div>` : `<p class="body-preview">この日の作業またはDLタスクはありません。</p>`}
           ${selectedPolicies.length ? `<div class="policy-list">${selectedPolicies.map(renderPolicyCard).join("")}</div>` : ""}
@@ -640,7 +643,6 @@
     if (/週/.test(text)) return "週";
     if (/月/.test(text)) return "月";
     if (/半期/.test(text)) return "半";
-    if (/プロジェクト|PJ/i.test(text)) return "PJ";
     if (/イベント/.test(text)) return "イベ";
     return truncate(text, 2);
   }
@@ -666,7 +668,7 @@
     const periods = getCalendarPeriodsForDate(isoDate, filter).slice(0, 3);
     if (!periods.length) return "";
     return `
-      <span class="period-lines" aria-label="方針・施策">
+      <span class="period-lines" aria-label="${OPERATIONS_LABEL}">
         ${periods.map((period) => {
           const classes = [
             "period-line",
@@ -692,15 +694,15 @@
   function renderCalendarPeriodSummary(date) {
     const periods = getCalendarPeriodsForDate(date, "all").slice(0, 4);
     return `
-      <section class="calendar-period-summary" aria-label="選択日の方針・施策">
-        <span class="period-summary-label">方針・施策</span>
+      <section class="calendar-period-summary" aria-label="選択日の${OPERATIONS_LABEL}">
+        <span class="period-summary-label">${OPERATIONS_LABEL}</span>
         <div class="period-summary-list">
           ${periods.length ? periods.map((period) => {
             const classes = [
               "period-summary-item",
               `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
             ].join(" ");
-            const action = period.source === "project" ? "edit-project-period" : "edit-policy";
+            const action = "edit-policy";
             const summary = compactPeriodSummary(period);
             return `
               <button class="${classes}" type="button" data-action="${action}" data-id="${escapeAttr(period.id)}" title="${escapeAttr(`${period.type || "方針"}: ${summary}`)}">
@@ -708,7 +710,7 @@
                 <span>${escapeHtml(summary)}</span>
               </button>
             `;
-          }).join("") : `<span class="period-summary-empty">方針・施策なし</span>`}
+          }).join("") : `<span class="period-summary-empty">運営情報なし</span>`}
         </div>
       </section>
     `;
@@ -733,7 +735,7 @@
     ].filter(([, items]) => items.length);
     const other = policies.filter((policy) => !/(週|月|半期)/.test(policy.type || ""));
     return `
-      <section class="calendar-policy-focus" aria-label="選択日の方針">
+      <section class="calendar-policy-focus" aria-label="選択日の${OPERATIONS_LABEL}">
         ${groups.map(([label, items]) => `
           <div class="policy-focus-card" data-card-action="edit-policy" data-id="${escapeAttr(items[0].id)}" tabindex="0">
             <span class="policy-focus-label">${label}</span>
@@ -793,11 +795,11 @@
     view.innerHTML = `
       <section class="section">
         <div class="section-head">
-          <h2 class="section-title">方針</h2>
+          <h2 class="section-title">${OPERATIONS_LABEL}</h2>
           <span class="section-count">${policies.length}件</span>
         </div>
         <div class="policy-list">
-          ${policies.length ? policies.map(renderPolicyCard).join("") : renderEmpty("方針はまだありません。", "方針を追加")}
+          ${policies.length ? policies.map(renderPolicyCard).join("") : renderEmpty("運営情報はまだありません。", "運営情報を追加")}
         </div>
       </section>
     `;
@@ -836,9 +838,9 @@
         html: memos.length ? `<div class="memo-list">${memos.map(renderMemoCard).join("")}</div>` : renderEmpty("メモはありません。", "メモを追加")
       },
       policies: {
-        title: "今日の方針",
-        subtitle: `${formatLongDate(date)}の方針・施策`,
-        html: policies.length ? `<div class="policy-list">${policies.map(renderPolicyCard).join("")}</div>` : renderEmpty("今日の方針・施策はありません。", "方針を追加")
+        title: "今日の運営情報",
+        subtitle: `${formatLongDate(date)}の${OPERATIONS_LABEL}`,
+        html: policies.length ? `<div class="policy-list">${policies.map(renderPolicyCard).join("")}</div>` : renderEmpty("今日の運営情報はありません。", "運営情報を追加")
       }
     }[kind] || null;
     if (!summary) return;
@@ -872,7 +874,6 @@
   function renderTaskCard(task, contextDate = "") {
     const priority = priorityMeta[task.priority] || priorityMeta.SUB;
     const department = findById(app.state.departments, task.departmentId);
-    const project = findById(app.state.projects, task.projectId);
     const linkedMemos = getLinkedMemos(task);
     const memoSummary = shouldShowMemos(task, linkedMemos)
       ? `<div class="memo-summary">${linkedMemos.map((memo) => `
@@ -898,15 +899,13 @@
             ${task.dueDate ? `<span class="tag">DL ${formatShortDate(task.dueDate)}</span>` : ""}
             ${task.assignee ? `<span class="tag">担当 ${escapeHtml(task.assignee)}</span>` : ""}
             ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
-            ${project ? `<span class="tag">${escapeHtml(project.name)}</span>` : ""}
             ${linkedMemos.length ? `<span class="tag">メモ ${linkedMemos.length}</span>` : ""}
             ${recurrence ? `<span class="tag">${escapeHtml(recurrence)}</span>` : ""}
           </div>
           ${memoSummary}
           <div class="card-actions">
-            <button class="mini-button" type="button" data-action="move-today" data-id="${escapeAttr(task.id)}">今日</button>
-            <button class="mini-button" type="button" data-action="task-to-memo" data-id="${escapeAttr(task.id)}">メモ化</button>
-            <button class="mini-button" type="button" data-action="task-to-policy" data-id="${escapeAttr(task.id)}">方針化</button>
+            <button class="mini-button" type="button" data-action="move-today" data-id="${escapeAttr(task.id)}">今日に追加</button>
+            <button class="mini-button" type="button" data-action="open-convert" data-kind="task" data-id="${escapeAttr(task.id)}">変換</button>
             <button class="mini-button" type="button" data-action="duplicate-task" data-id="${escapeAttr(task.id)}">複製</button>
             <button class="mini-button" type="button" data-action="delete-task" data-id="${escapeAttr(task.id)}">削除</button>
           </div>
@@ -917,7 +916,6 @@
 
   function renderMemoCard(memo) {
     const department = findById(app.state.departments, memo.departmentId);
-    const project = findById(app.state.projects, memo.projectId);
     const linkedTasks = memo.taskIds.map((id) => findById(app.state.tasks, id)).filter(Boolean);
     const recordings = memo.recordings || [];
     const previewText = getMemoPreviewText(memo);
@@ -925,18 +923,15 @@
       <article class="memo-card" data-card-action="edit-memo" data-id="${escapeAttr(memo.id)}" tabindex="0">
         <div class="section-head">
           <h3><button class="title-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">${escapeHtml(memo.title || "メモ")}</button></h3>
-          <span class="priority-pill ${(priorityMeta[memo.priority] || priorityMeta.SUB).className}">${(priorityMeta[memo.priority] || priorityMeta.SUB).label}</span>
         </div>
         <div class="meta-row">
           ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
-          ${project ? `<span class="tag">${escapeHtml(project.name)}</span>` : ""}
           ${linkedTasks.length ? `<span class="tag">関連タスク ${linkedTasks.length}</span>` : ""}
           ${recordings.length ? `<span class="tag">録音 ${recordings.length}</span>` : ""}
         </div>
         ${previewText ? `<button class="body-preview body-preview-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">${escapeHtml(previewText)}</button>` : ""}
         <div class="card-actions">
-          <button class="mini-button" type="button" data-action="memo-to-task" data-id="${escapeAttr(memo.id)}">タスク化</button>
-          <button class="mini-button" type="button" data-action="memo-to-policy" data-id="${escapeAttr(memo.id)}">方針化</button>
+          <button class="mini-button" type="button" data-action="open-convert" data-kind="memo" data-id="${escapeAttr(memo.id)}">変換</button>
           <button class="mini-button" type="button" data-action="delete-memo" data-id="${escapeAttr(memo.id)}">削除</button>
         </div>
       </article>
@@ -957,11 +952,12 @@
   function renderPolicyCard(policy) {
     const department = findById(app.state.departments, policy.departmentId);
     const content = getPolicyContent(policy);
+    const colorClass = `period-line-${stableIndex(policy.id || policy.type, PERIOD_LINE_CLASS_COUNT)}`;
     return `
       <article class="policy-card" data-card-action="edit-policy" data-id="${escapeAttr(policy.id)}" tabindex="0">
         <div class="section-head">
           <h3>${escapeHtml(policy.title)}</h3>
-          <span class="status-pill">${escapeHtml(policy.type || "方針")}</span>
+          <span class="status-pill ${colorClass}">${escapeHtml(policy.type || "方針")}</span>
         </div>
         <div class="meta-row">
           ${policy.periodStart ? `<span class="tag">${formatShortDate(policy.periodStart)}</span>` : ""}
@@ -971,8 +967,7 @@
         ${content ? `<p class="body-preview">${escapeHtml(truncate(content, 150))}</p>` : ""}
         <div class="card-actions">
           <button class="mini-button" type="button" data-action="edit-policy" data-id="${escapeAttr(policy.id)}">編集</button>
-          <button class="mini-button" type="button" data-action="policy-to-task" data-id="${escapeAttr(policy.id)}">タスク化</button>
-          <button class="mini-button" type="button" data-action="policy-to-memo" data-id="${escapeAttr(policy.id)}">メモ化</button>
+          <button class="mini-button" type="button" data-action="open-convert" data-kind="policy" data-id="${escapeAttr(policy.id)}">変換</button>
           <button class="mini-button" type="button" data-action="delete-policy" data-id="${escapeAttr(policy.id)}">削除</button>
         </div>
       </article>
@@ -1013,6 +1008,7 @@
     if (action === "edit-task") openTaskForm(findById(app.state.tasks, id));
     if (action === "edit-memo") openMemoForm(findById(app.state.memos, id));
     if (action === "edit-policy") openPolicyForm(findById(app.state.policies, id));
+    if (action === "open-convert") openConvertChoice(button.dataset.kind, id);
     if (action === "task-to-memo") openMemoFromTask(id);
     if (action === "task-to-policy") openPolicyFromTask(id);
     if (action === "memo-to-policy") openPolicyFromMemo(id);
@@ -1032,8 +1028,8 @@
       await deleteEntity("tasks", id, "タスクを削除しました");
     }
     if (action === "delete-memo") await deleteMemo(id);
-    if (action === "delete-policy") await deleteEntity("policies", id, "方針を削除しました");
-    if (action === "classify-memo-form") classifyMemoForm();
+    if (action === "delete-policy") await deleteEntity("policies", id, "運営情報を削除しました");
+    if (action === "classify-memo-form") await classifyMemoForm();
     if (action === "memo-to-task") openTaskFromMemo(id);
     if (action === "restore-deleted-item") await restoreDeletedItem(id);
     if (action === "purge-deleted-item") await purgeDeletedItem(id);
@@ -1045,7 +1041,6 @@
     if (action === "month-prev") await changeMonth(-1);
     if (action === "month-next") await changeMonth(1);
     if (action === "select-day") await selectDay(button.dataset.date);
-    if (action === "edit-project-period") openSettings();
     if (action === "resolve-conflict") await resolveConflict(button.dataset.mode);
     if (action === "back-to-task-form") reopenPendingTaskForm();
     if (action === "export-json") exportJson();
@@ -1053,10 +1048,11 @@
     if (action === "run-import") await runImportFromDialog();
     if (action === "add-department") addSettingsRow("department");
     if (action === "add-policy-type") addSettingsRow("policyType");
-    if (action === "add-project") addSettingsRow("project");
     if (action === "toggle-settings-panel") toggleSettingsPanel(button);
     if (action === "move-settings-row") moveSettingsRow(button);
     if (action === "remove-settings-row") button.closest(".list-row")?.remove();
+    if (action === "save-policy-period") savePolicyPeriod(button);
+    if (action === "save-policy-period-mode") await savePendingPolicy(button.dataset.mode);
   }
 
   function scrollCurrentViewToTop() {
@@ -1094,9 +1090,6 @@
       const policy = findById(app.state.policies, id);
       if (!policy) return false;
       openPolicyForm(policy);
-    } else if (action === "edit-project-period") {
-      openSettings();
-      showToast("プロジェクトの方針・施策は設定で編集できます。");
     } else {
       return false;
     }
@@ -1183,7 +1176,6 @@
     if (kind === "task") openTaskForm(null, defaultTaskForCurrentContext());
     if (kind === "memo") openMemoForm();
     if (kind === "policy") openPolicyForm();
-    if (kind === "project") openProjectForm();
     if (kind === "department") openDepartmentForm();
   }
 
@@ -1276,6 +1268,49 @@
     `);
   }
 
+  function openConvertChoice(kind, id) {
+    const config = {
+      task: {
+        title: "変換",
+        subtitle: "タスクから作成する内容を選んでください。",
+        actions: [
+          ["task-to-memo", "メモへ", "関連メモとして残す"],
+          ["task-to-policy", "運営情報へ", "期間や判断材料として残す"]
+        ]
+      },
+      memo: {
+        title: "変換",
+        subtitle: "メモから作成する内容を選んでください。",
+        actions: [
+          ["memo-to-task", "タスクへ", "実施項目にする"],
+          ["memo-to-policy", "運営情報へ", "判断材料として残す"]
+        ]
+      },
+      policy: {
+        title: "変換",
+        subtitle: "運営情報から作成する内容を選んでください。",
+        actions: [
+          ["policy-to-task", "タスクへ", "実施項目にする"],
+          ["policy-to-memo", "メモへ", "記録として残す"]
+        ]
+      }
+    }[kind];
+    if (!config) return;
+    openSheet(`
+      <div class="sheet sheet-compact">
+        ${renderSheetHeader(config.title, config.subtitle)}
+        <div class="choice-grid">
+          ${config.actions.map(([action, label, sub]) => `
+            <button class="choice-button" type="button" data-action="${action}" data-id="${escapeAttr(id)}">
+              <strong>${label}</strong>
+              <span>${sub}</span>
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    `);
+  }
+
   function defaultTaskForCurrentContext() {
     if (app.state.ui.activeTab === "today") return { actionDate: todayIso(), priority: "P2" };
     if (app.state.ui.activeTab === "calendar") return { actionDate: app.state.ui.selectedDate || todayIso(), priority: "P2" };
@@ -1293,10 +1328,8 @@
       dueDate: existing?.dueDate || defaults.dueDate || "",
       priority: normalizeTaskPriority(existing?.priority || defaults.priority || "SUB"),
       departmentId: existing?.departmentId || defaults.departmentId || "",
-      projectId: existing?.projectId || defaults.projectId || "",
       estimatedMinutes: existing?.estimatedMinutes || defaults.estimatedMinutes || "",
       memoIds: existing?.memoIds || defaults.memoIds || [],
-      showLinkedMemos: existing?.showLinkedMemos !== false,
       recurrence: normalizeRecurrence(existing?.recurrence || defaults.recurrence || {})
     };
     openSheet(`
@@ -1317,43 +1350,35 @@
               <input id="taskDueDate" name="dueDate" type="date">
             </div>
           </div>
-          <div class="field-inline">
-            <div class="field">
-              <label>優先度の空き状況</label>
-              <input id="taskPriority" name="priority" type="hidden" value="${escapeAttr(value.priority)}">
-              <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
-            </div>
-            <div class="field">
-              <label for="taskAssignee">担当者</label>
-              <input id="taskAssignee" name="assignee" value="${escapeAttr(value.assignee)}" autocomplete="off" placeholder="任意">
-            </div>
-            <div class="field">
-              <label for="taskDepartment">${CLASSIFICATION_LABEL}</label>
-              <select id="taskDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
-            </div>
-            <div class="field">
-              <label for="taskProject">プロジェクト</label>
-              <select id="taskProject" name="projectId">${renderProjectOptions(value.projectId)}</select>
-            </div>
-            <div class="field">
-              <label for="taskEstimate">見積分</label>
-              <input id="taskEstimate" name="estimatedMinutes" type="number" min="0" step="5" value="${escapeAttr(value.estimatedMinutes)}">
-            </div>
+          <div class="field">
+            <label>優先度の空き状況</label>
+            <input id="taskPriority" name="priority" type="hidden" value="${escapeAttr(value.priority)}">
+            <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
           </div>
           ${renderRecurrenceFields(value.recurrence)}
           <div class="field">
             <label for="taskMemos">関連メモ</label>
-            <select id="taskMemos" name="memoIds" multiple size="4">${renderMemoOptions(value.memoIds)}</select>
+            ${renderMemoPicker(value.memoIds)}
             <div class="toolbar">
               ${value.id
                 ? `<button class="ghost-button compact" type="button" data-action="task-to-memo" data-id="${escapeAttr(value.id)}">新しい関連メモ</button>`
                 : `<span class="form-hint">関連メモの新規作成は、タスク保存後に使えます。</span>`}
             </div>
           </div>
-          <label class="toolbar">
-            <input name="showLinkedMemos" type="checkbox" ${value.showLinkedMemos ? "checked" : ""}>
-            このタスクではメモ要約を表示
-          </label>
+          <div class="field-inline task-owner-row">
+            <div class="field">
+              <label for="taskDepartment">${CLASSIFICATION_LABEL}</label>
+              <select id="taskDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
+            </div>
+            <div class="field">
+              <label for="taskAssignee">担当者</label>
+              <input id="taskAssignee" name="assignee" value="${escapeAttr(value.assignee)}" autocomplete="off" placeholder="任意">
+            </div>
+            <div class="field">
+              <label for="taskEstimate">見積分</label>
+              <input id="taskEstimate" name="estimatedMinutes" type="number" min="0" step="5" value="${escapeAttr(value.estimatedMinutes)}">
+            </div>
+          </div>
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
           </div>
@@ -1386,9 +1411,7 @@
       decisions: existing?.decisions || defaults.decisions || "",
       nextActions: existing?.nextActions || defaults.nextActions || "",
       transcript: existing?.transcript || defaults.transcript || "",
-      priority: normalizeTaskPriority(existing?.priority || defaults.priority || "SUB"),
       departmentId: existing?.departmentId || defaults.departmentId || "",
-      projectId: existing?.projectId || defaults.projectId || "",
       taskIds: existing?.taskIds || defaults.taskIds || [],
       recordings: existing?.recordings || []
     };
@@ -1417,7 +1440,7 @@
             <textarea id="memoBody" name="body" required>${escapeHtml(value.body)}</textarea>
           </div>
           <div class="toolbar">
-            <button class="ghost-button compact" type="button" data-action="classify-memo-form">本文から自動判定</button>
+            <button class="ghost-button compact" type="button" data-action="classify-memo-form">自動判定</button>
           </div>
           <div class="field-inline">
             <div class="field">
@@ -1433,10 +1456,6 @@
               <textarea id="memoNextActions" name="nextActions">${escapeHtml(value.nextActions)}</textarea>
             </div>
           </div>
-          <div class="field">
-            <label for="memoTranscript">文字起こし</label>
-            <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(value.transcript)}</textarea>
-          </div>
           ${value.recordings.length ? `
             <div class="field">
               <label>録音</label>
@@ -1445,22 +1464,21 @@
           ` : ""}
           <div class="field-inline">
             <div class="field">
-              <label for="memoPriority">優先度</label>
-              <select id="memoPriority" name="priority">${renderPriorityOptions(value.priority)}</select>
-            </div>
-            <div class="field">
               <label for="memoDepartment">${CLASSIFICATION_LABEL}</label>
               <select id="memoDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
             </div>
           </div>
           <div class="field">
-            <label for="memoProject">プロジェクト</label>
-            <select id="memoProject" name="projectId">${renderProjectOptions(value.projectId)}</select>
-          </div>
-          <div class="field">
             <label for="memoTasks">関連タスク</label>
             ${renderTaskPicker(value.taskIds)}
           </div>
+          <details class="transcript-details">
+            <summary>文字起こし</summary>
+            <div class="field">
+              <label for="memoTranscript">全文</label>
+              <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(value.transcript)}</textarea>
+            </div>
+          </details>
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
           </div>
@@ -1486,7 +1504,7 @@
     };
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader(existing ? "方針・施策編集" : "方針・施策追加", "内容をまとめて残します。")}
+        ${renderSheetHeader(existing ? "運営情報編集" : "運営情報追加", "内容をまとめて残します。")}
         <form id="policyForm" class="form-grid" data-id="${escapeAttr(value.id)}">
           ${value.taskIds.map((id) => `<input type="hidden" name="taskIds" value="${escapeAttr(id)}">`).join("")}
           ${value.memoIds.map((id) => `<input type="hidden" name="memoIds" value="${escapeAttr(id)}">`).join("")}
@@ -1519,27 +1537,6 @@
     `);
   }
 
-  function openProjectForm() {
-    const createdAt = nowIso();
-    const id = uid("project");
-    app.state.projects.push({
-      id,
-      name: "新しいプロジェクト",
-      purpose: "",
-      departmentId: "",
-      startDate: "",
-      endDate: "",
-      status: "active",
-      createdAt,
-      updatedAt: createdAt
-    });
-    saveState().then(() => {
-      closeDialogs();
-      openSettings();
-      showToast("プロジェクトを追加しました。設定で名前を変更できます。");
-    });
-  }
-
   function openDepartmentForm() {
     const createdAt = nowIso();
     app.state.departments.push({
@@ -1561,7 +1558,7 @@
     const items = [
       ["task", "タスク", "実施とDL"],
       ["memo", "メモ", "走り書き"],
-      ["policy", "方針・施策", "内容"]
+      ["policy", OPERATIONS_LABEL, "内容"]
     ];
     return `
       <div class="choice-grid" aria-label="追加種別">
@@ -1588,16 +1585,16 @@
               ).join("")}
             </select>
           </div>
-          <div class="field recurrence-section" data-recurrence-section="weekly monthly-day monthly-nth monthly-end custom">
+          <div class="field recurrence-section" data-recurrence-section="weekly monthly-day monthly-start monthly-end custom">
             <label for="taskRecurrenceInterval">間隔</label>
             <input id="taskRecurrenceInterval" name="recurrenceInterval" type="number" min="1" max="24" step="1" value="${escapeAttr(value.interval)}">
           </div>
         </div>
         <div class="recurrence-section recurrence-weekdays" data-recurrence-section="weekly">
-          ${weekdayLabels.map((label, index) => `
+          ${weekdayChoiceOrder.map((index) => `
             <label class="weekday-choice">
               <input type="checkbox" name="recurrenceWeekdays" value="${index}" ${value.weekdays.includes(index) ? "checked" : ""}>
-              <span>${label}</span>
+              <span>${weekdayLabels[index]}</span>
             </label>
           `).join("")}
         </div>
@@ -1607,15 +1604,20 @@
         </div>
         <div class="field-inline recurrence-section" data-recurrence-section="monthly-nth">
           <div class="field">
-            <label for="taskRecurrenceOrdinal">第</label>
-            <select id="taskRecurrenceOrdinal" name="recurrenceOrdinal">
-              ${[1, 2, 3, 4, 5].map((ordinal) => `<option value="${ordinal}"${selected(value.ordinal, ordinal)}>${ordinal}</option>`).join("")}
-            </select>
+            <label>第</label>
+            <div class="recurrence-ordinal-grid">
+              ${[1, 2, 3, 4, 5].map((ordinal) => `
+                <label class="weekday-choice">
+                  <input type="checkbox" name="recurrenceOrdinals" value="${ordinal}" ${value.nthOrdinals.includes(ordinal) ? "checked" : ""}>
+                  <span>${ordinal}</span>
+                </label>
+              `).join("")}
+            </div>
           </div>
           <div class="field">
             <label for="taskRecurrenceWeekday">曜日</label>
             <select id="taskRecurrenceWeekday" name="recurrenceWeekday">
-              ${weekdayLabels.map((label, index) => `<option value="${index}"${selected(value.weekday, index)}>${label}曜日</option>`).join("")}
+              ${weekdayChoiceOrder.map((index) => `<option value="${index}"${selected(value.weekday, index)}>${weekdayLabels[index]}曜日</option>`).join("")}
             </select>
           </div>
         </div>
@@ -1642,12 +1644,10 @@
       interval: Number(data.get("recurrenceInterval") || 1),
       weekdays: data.getAll("recurrenceWeekdays").map(Number),
       monthDay: Number(data.get("recurrenceMonthDay") || 1),
-      ordinal: Number(data.get("recurrenceOrdinal") || 2),
+      ordinal: Number(data.getAll("recurrenceOrdinals")[0] || 2),
+      nthOrdinals: data.getAll("recurrenceOrdinals").map(Number),
       weekday: Number(data.get("recurrenceWeekday") || 0),
-      customDates: String(data.get("recurrenceCustomDates") || "")
-        .split(/[\n,、\s]+/)
-        .map((date) => date.trim())
-        .filter(Boolean)
+      customDates: parseFlexibleDateList(String(data.get("recurrenceCustomDates") || ""))
     });
   }
 
@@ -1716,10 +1716,10 @@
       dueDate: String(data.get("dueDate") || ""),
       priority: normalizeTaskPriority(data.get("priority")),
       departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
-      projectId: String(data.get("projectId") || ""),
+      projectId: "",
       estimatedMinutes: Number(data.get("estimatedMinutes") || 0),
       memoIds: data.getAll("memoIds").map(String),
-      showLinkedMemos: data.get("showLinkedMemos") === "on",
+      showLinkedMemos: true,
       recurrence: recurrenceFromForm(data),
       completedDates: existing?.completedDates || [],
       createdAt: existing?.createdAt || now,
@@ -1916,9 +1916,9 @@
       nextActions: String(data.get("nextActions") || "").trim(),
       transcript,
       dueDate: "",
-      priority: normalizeTaskPriority(data.get("priority")),
+      priority: "SUB",
       departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
-      projectId: String(data.get("projectId") || ""),
+      projectId: "",
       taskIds: data.getAll("taskIds").map(String),
       recordings,
       createdAt: existing?.createdAt || now,
@@ -1933,18 +1933,39 @@
   }
 
   async function handlePolicySubmit(form) {
+    const payload = buildPolicyPayloadFromForm(form, "saved");
+    const periodPicker = form.querySelector("[data-period-picker]");
+    const draftStart = periodPicker?.dataset.draftStart || "";
+    const draftEnd = periodPicker?.dataset.draftEnd || "";
+    const savedStart = periodPicker?.dataset.savedStart || "";
+    const savedEnd = periodPicker?.dataset.savedEnd || "";
+    if (draftStart !== savedStart || draftEnd !== savedEnd) {
+      app.pendingPolicySave = {
+        payload,
+        draftStart,
+        draftEnd,
+        savedStart,
+        savedEnd
+      };
+      openUnsavedPeriodChoice();
+      return;
+    }
+    await savePolicyPayload(payload);
+  }
+
+  function buildPolicyPayloadFromForm(form, periodMode = "saved") {
     const data = new FormData(form);
-    const id = form.dataset.id || uid("policy");
-    const existing = findById(app.state.policies, id);
+    const picker = form.querySelector("[data-period-picker]");
     const now = nowIso();
+    const existing = findById(app.state.policies, form.dataset.id || "");
     const content = String(data.get("content") || "").trim();
-    upsertById(app.state.policies, {
+    return {
       ...existing,
-      id,
+      id: form.dataset.id || uid("policy"),
       title: String(data.get("title") || "").trim(),
       type: normalizePolicyType(data.get("type") || "方針"),
-      periodStart: String(data.get("periodStart") || ""),
-      periodEnd: String(data.get("periodEnd") || ""),
+      periodStart: periodMode === "draft" ? (picker?.dataset.draftStart || "") : String(data.get("periodStart") || ""),
+      periodEnd: periodMode === "draft" ? (picker?.dataset.draftEnd || "") : String(data.get("periodEnd") || ""),
       departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
       background: "",
       policy: content,
@@ -1954,11 +1975,61 @@
       memoIds: data.getAll("memoIds").map(String),
       createdAt: existing?.createdAt || now,
       updatedAt: now
-    });
+    };
+  }
+
+  function openUnsavedPeriodChoice() {
+    const pending = app.pendingPolicySave;
+    if (!pending) return;
+    openSheet(`
+      <div class="sheet sheet-compact">
+        ${renderSheetHeader("期間の保存", "期間が変更されています。どう保存しますか。")}
+        <div class="choice-grid">
+          <button class="choice-button" type="button" data-action="save-policy-period-mode" data-mode="with-period">
+            <strong>期間も保存</strong>
+            <span>${escapeHtml(formatPolicyPeriodRange(pending.draftStart, pending.draftEnd) || "期間なし")}</span>
+          </button>
+          <button class="choice-button" type="button" data-action="save-policy-period-mode" data-mode="without-period">
+            <strong>本文だけ保存</strong>
+            <span>期間は ${escapeHtml(formatPolicyPeriodRange(pending.savedStart, pending.savedEnd) || "期間なし")} のまま</span>
+          </button>
+          <button class="choice-button" type="button" data-action="save-policy-period-mode" data-mode="back">
+            <strong>戻る</strong>
+            <span>編集画面に戻る</span>
+          </button>
+        </div>
+      </div>
+    `);
+  }
+
+  async function savePendingPolicy(mode) {
+    const pending = app.pendingPolicySave;
+    if (!pending) return;
+    if (mode === "back") {
+      const draft = {
+        ...pending.payload,
+        periodStart: pending.draftStart,
+        periodEnd: pending.draftEnd
+      };
+      app.pendingPolicySave = null;
+      openPolicyForm(draft);
+      return;
+    }
+    const payload = {
+      ...pending.payload,
+      periodStart: mode === "with-period" ? pending.draftStart : pending.savedStart,
+      periodEnd: mode === "with-period" ? pending.draftEnd : pending.savedEnd
+    };
+    app.pendingPolicySave = null;
+    await savePolicyPayload(payload);
+  }
+
+  async function savePolicyPayload(payload) {
+    upsertById(app.state.policies, normalizePolicy(payload));
     await saveState();
     closeDialogs();
     render();
-    showToast("方針・施策を保存しました。");
+    showToast("運営情報を保存しました。");
   }
 
   async function toggleTask(id, date = "") {
@@ -2042,17 +2113,13 @@
   async function moveTaskToToday(id) {
     const task = findById(app.state.tasks, id);
     if (!task) return;
-    if (!SINGLE_SLOT_PRIORITIES.includes(task.priority) && task.priority !== "SUB") {
-      openTodayPriorityDialog(task);
-      return;
-    }
-    await assignTaskToToday(id, task.priority || "SUB");
+    openTodayPriorityDialog(task);
   }
 
   function openTodayPriorityDialog(task) {
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader("今日の優先度を選択", "今日のタスクに入れるため、優先度を選んでください。")}
+        ${renderSheetHeader("今日に追加", "優先度を選んでください。")}
         <div class="choice-grid">
           ${["P1", "P2", "P3", "SUB"].map((priority) => `
             <button class="choice-button" type="button" data-action="assign-today-priority" data-id="${escapeAttr(task.id)}" data-priority="${priority}">
@@ -2174,7 +2241,6 @@
   }
 
   function entityTitle(kind, item) {
-    if (kind === "projects") return item.name || "プロジェクト";
     if (kind === "departments") return item.name || CLASSIFICATION_LABEL;
     return item.title || item.name || "項目";
   }
@@ -2184,17 +2250,59 @@
     return JSON.parse(JSON.stringify(item));
   }
 
-  function classifyMemoForm() {
+  async function classifyMemoForm() {
     const form = document.getElementById("memoForm");
     if (!form) return;
+    const title = String(form.elements.title?.value || "");
     const body = String(form.elements.body?.value || "");
     const transcript = String(form.elements.transcript?.value || "");
-    const organized = organizeText([body, transcript].filter(Boolean).join("\n"));
+    const source = [title, body, transcript].filter(Boolean).join("\n");
+    const organized = await classifyMemoText(source);
     if (!form.elements.title.value.trim()) form.elements.title.value = organized.title;
     form.elements.agenda.value = organized.agenda;
     form.elements.decisions.value = organized.decisions;
     form.elements.nextActions.value = organized.nextActions;
-    showToast("本文と文字起こしから判定しました。保存前に確認してください。");
+    showToast("タイトル、本文、文字起こしから判定しました。保存前に確認してください。");
+  }
+
+  async function classifyMemoText(text) {
+    const endpoint = String(app.state.settings.llmEndpoint || "").trim();
+    if (endpoint) {
+      try {
+        const external = await requestExternalMemoClassification(endpoint, text);
+        if (external) return external;
+      } catch (error) {
+        showToast(`外部LLM判定に失敗しました。ローカル判定に切り替えます: ${error.message}`);
+      }
+    }
+    return organizeText(text);
+  }
+
+  async function requestExternalMemoClassification(endpoint, text) {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: app.state.settings.llmProvider || "external",
+        task: "claris.memo.classify",
+        input: text,
+        schema: {
+          title: "string",
+          agenda: "string",
+          decisions: "string",
+          nextActions: "string"
+        }
+      })
+    });
+    if (!response.ok) throw new Error(`${response.status}`);
+    const data = await response.json();
+    const result = data.result && typeof data.result === "object" ? data.result : data;
+    return {
+      title: String(result.title || firstLine(text) || "メモ"),
+      agenda: String(result.agenda || ""),
+      decisions: String(result.decisions || ""),
+      nextActions: String(result.nextActions || "")
+    };
   }
 
   function openTaskFromMemo(id) {
@@ -2202,19 +2310,17 @@
     if (!memo) return;
     openTaskForm(null, {
       title: memo.nextActions || memo.title,
-      priority: normalizeTaskPriority(memo.priority),
+      priority: "SUB",
       departmentId: memo.departmentId,
-      projectId: memo.projectId,
       memoIds: [memo.id]
     });
     const form = document.getElementById("taskForm");
     if (!form) return;
     form.elements.title.value = memo.nextActions || memo.title || "メモから作成";
-    form.elements.priority.value = normalizeTaskPriority(memo.priority);
+    form.elements.priority.value = "SUB";
     form.elements.departmentId.value = memo.departmentId || "";
-    form.elements.projectId.value = memo.projectId || "";
-    [...form.elements.memoIds.options].forEach((option) => {
-      option.selected = option.value === memo.id;
+    [...form.querySelectorAll('input[name="memoIds"]')].forEach((input) => {
+      input.checked = input.value === memo.id;
     });
     updateTaskPriorityPreview(form);
   }
@@ -2227,7 +2333,6 @@
       body: buildTaskReferenceText(task),
       priority: task.priority,
       departmentId: task.departmentId,
-      projectId: task.projectId,
       taskIds: [task.id]
     });
   }
@@ -2236,7 +2341,7 @@
     const task = findById(app.state.tasks, id);
     if (!task) return;
     openPolicyForm(null, {
-      title: task.title || "タスクから方針",
+      title: task.title || "タスクから運営情報",
       type: "施策",
       periodStart: task.actionDate || "",
       periodEnd: task.dueDate || task.actionDate || "",
@@ -2251,7 +2356,7 @@
     const memo = findById(app.state.memos, id);
     if (!memo) return;
     openPolicyForm(null, {
-      title: memo.title || "メモから方針",
+      title: memo.title || "メモから運営情報",
       type: "方針",
       departmentId: memo.departmentId,
       policy: getMemoPreviewText(memo) || memo.body || memo.title,
@@ -2264,7 +2369,7 @@
     const policy = findById(app.state.policies, id);
     if (!policy) return;
     openTaskForm(null, {
-      title: policy.title || "方針タスク",
+      title: policy.title || "運営情報タスク",
       actionDate: policy.periodStart || app.state.ui.selectedDate || todayIso(),
       dueDate: policy.periodEnd || "",
       priority: "SUB",
@@ -2277,7 +2382,7 @@
     const policy = findById(app.state.policies, id);
     if (!policy) return;
     openMemoForm(null, {
-      title: policy.title || "方針メモ",
+      title: policy.title || "運営情報メモ",
       body: getPolicyContent(policy) || policy.title,
       priority: "SUB",
       departmentId: policy.departmentId,
@@ -2574,10 +2679,6 @@
               <input name="showCompleted" type="checkbox" ${app.state.settings.showCompleted ? "checked" : ""}>
               完了済みを表示
             </label>
-            <label class="toolbar">
-              <input name="showLinkedMemos" type="checkbox" ${app.state.settings.showLinkedMemos ? "checked" : ""}>
-              タスクにメモ要約を表示
-            </label>
           </section>
           <section class="settings-block settings-collapsible">
             <div class="section-head">
@@ -2596,7 +2697,7 @@
             <div class="section-head">
               <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="policyTypeRows" aria-expanded="false">
                 <span class="collapse-mark">＋</span>
-                <span class="section-title">方針・施策の種別</span>
+                <span class="section-title">運営情報の種別</span>
                 <span class="section-count">${getPolicyTypes().length}件</span>
               </button>
               <button class="mini-button" type="button" data-action="add-policy-type">追加</button>
@@ -2605,17 +2706,17 @@
               ${getPolicyTypes().map((type) => renderPolicyTypeRow(type)).join("")}
             </div>
           </section>
-          <section class="settings-block settings-collapsible">
-            <div class="section-head">
-              <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="projectRows" aria-expanded="false">
-                <span class="collapse-mark">＋</span>
-                <span class="section-title">プロジェクト</span>
-                <span class="section-count">${app.state.projects.length}件</span>
-              </button>
-              <button class="mini-button" type="button" data-action="add-project">追加</button>
-            </div>
-            <div class="list-editor is-collapsed" id="projectRows">
-              ${app.state.projects.map((project) => renderProjectRow(project)).join("")}
+          <section class="settings-block">
+            <h2 class="section-title">外部LLM連携準備</h2>
+            <div class="field-inline">
+              <div class="field">
+                <label for="settingsLlmProvider">連携名</label>
+                <input id="settingsLlmProvider" name="llmProvider" value="${escapeAttr(app.state.settings.llmProvider || "")}" autocomplete="off" placeholder="Copilot / Power Automate など">
+              </div>
+              <div class="field">
+                <label for="settingsLlmEndpoint">エンドポイント</label>
+                <input id="settingsLlmEndpoint" name="llmEndpoint" value="${escapeAttr(app.state.settings.llmEndpoint || "")}" autocomplete="off" placeholder="https:// または http://localhost">
+              </div>
             </div>
           </section>
           <section class="settings-block">
@@ -2634,12 +2735,17 @@
             <textarea id="settingsImportText" name="settingsImportText" placeholder="JSON / CSV / テキストを貼り付け"></textarea>
             <button class="ghost-button" type="button" data-action="run-import">内容を取り込む</button>
           </section>
-          <section class="settings-block">
+          <section class="settings-block settings-collapsible">
             <div class="section-head">
-              <h2 class="section-title">削除済み</h2>
-              <span class="section-count">${app.state.deletedItems.length}件</span>
+              <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="deletedRows" aria-expanded="false">
+                <span class="collapse-mark">＋</span>
+                <span class="section-title">削除済み</span>
+                <span class="section-count">${app.state.deletedItems.length}件</span>
+              </button>
             </div>
-            ${renderDeletedItems()}
+            <div class="list-editor is-collapsed" id="deletedRows">
+              ${renderDeletedItems()}
+            </div>
           </section>
           <div class="form-actions">
             <button class="solid-button" type="submit">設定を保存</button>
@@ -2650,7 +2756,7 @@
   }
 
   function renderDeletedItems() {
-    if (!app.state.deletedItems.length) return `<p class="body-preview">削除したタスク、メモ、方針はここにまとまります。</p>`;
+    if (!app.state.deletedItems.length) return `<p class="body-preview">削除したタスク、メモ、運営情報はここにまとまります。</p>`;
     return `
       <div class="deleted-list">
         ${app.state.deletedItems.slice(0, 40).map((deleted) => `
@@ -2670,7 +2776,7 @@
   }
 
   function deletedKindLabel(kind) {
-    return ({ tasks: "タスク", memos: "メモ", policies: "方針" })[kind] || "項目";
+    return ({ tasks: "タスク", memos: "メモ", policies: OPERATIONS_LABEL })[kind] || "項目";
   }
 
   function renderDepartmentRow(department) {
@@ -2690,20 +2796,11 @@
     const id = uid("policy-type");
     return `
       <div class="list-row" data-row="policyType" data-id="${escapeAttr(id)}">
-        <input name="policyTypeName" value="${escapeAttr(type)}" aria-label="方針・施策の種別">
+        <input name="policyTypeName" value="${escapeAttr(type)}" aria-label="運営情報の種別">
         <div class="list-row-order" aria-label="種別の並び替え">
           <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="up" aria-label="上へ">↑</button>
           <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="down" aria-label="下へ">↓</button>
         </div>
-        <button class="mini-button" type="button" data-action="remove-settings-row">削除</button>
-      </div>
-    `;
-  }
-
-  function renderProjectRow(project) {
-    return `
-      <div class="list-row" data-row="project" data-id="${escapeAttr(project.id)}">
-        <input name="projectName" value="${escapeAttr(project.name)}" aria-label="プロジェクト名">
         <button class="mini-button" type="button" data-action="remove-settings-row">削除</button>
       </div>
     `;
@@ -2719,11 +2816,6 @@
       const target = document.getElementById("policyTypeRows");
       target?.insertAdjacentHTML("beforeend", renderPolicyTypeRow("新しい種別"));
       setSettingsPanelOpen("policyTypeRows", true);
-    }
-    if (type === "project") {
-      const target = document.getElementById("projectRows");
-      target?.insertAdjacentHTML("beforeend", renderProjectRow({ id: uid("project"), name: "新しいプロジェクト" }));
-      setSettingsPanelOpen("projectRows", true);
     }
   }
 
@@ -2748,7 +2840,9 @@
     const data = new FormData(form);
     const now = nowIso();
     app.state.settings.showCompleted = data.get("showCompleted") === "on";
-    app.state.settings.showLinkedMemos = data.get("showLinkedMemos") === "on";
+    app.state.settings.showLinkedMemos = true;
+    app.state.settings.llmProvider = String(data.get("llmProvider") || "").trim();
+    app.state.settings.llmEndpoint = String(data.get("llmEndpoint") || "").trim();
     app.state.departments = [...form.querySelectorAll('[data-row="department"]')].map((row, index) => ({
       id: row.dataset.id || uid("dept"),
       name: row.querySelector("input")?.value.trim() || "未名称",
@@ -2760,17 +2854,7 @@
     app.state.settings.policyTypes = normalizePolicyTypes([...form.querySelectorAll('[data-row="policyType"] input')]
       .map((input) => input.value.trim())
       .filter(Boolean));
-    app.state.projects = [...form.querySelectorAll('[data-row="project"]')].map((row) => ({
-      id: row.dataset.id || uid("project"),
-      name: row.querySelector("input")?.value.trim() || "未名称",
-      purpose: findById(app.state.projects, row.dataset.id)?.purpose || "",
-      departmentId: findById(app.state.projects, row.dataset.id)?.departmentId || "",
-      startDate: findById(app.state.projects, row.dataset.id)?.startDate || "",
-      endDate: findById(app.state.projects, row.dataset.id)?.endDate || "",
-      status: "active",
-      createdAt: findById(app.state.projects, row.dataset.id)?.createdAt || now,
-      updatedAt: now
-    }));
+    app.state.projects = [];
     await saveState();
     closeDialogs();
     render();
@@ -2799,7 +2883,7 @@
     const result = await importText(text);
     closeDialogs();
     render();
-    showToast(`${result.tasks}件のタスク、${result.memos}件のメモ、${result.policies || 0}件の方針を取り込みました。`);
+    showToast(`${result.tasks}件のタスク、${result.memos}件のメモ、${result.policies || 0}件の運営情報を取り込みました。`);
   }
 
   async function runImportFromDialog() {
@@ -2813,7 +2897,7 @@
     if (textarea) textarea.value = "";
     closeDialogs();
     render();
-    showToast(`${result.tasks}件のタスク、${result.memos}件のメモ、${result.policies || 0}件の方針を取り込みました。`);
+    showToast(`${result.tasks}件のタスク、${result.memos}件のメモ、${result.policies || 0}件の運営情報を取り込みました。`);
   }
 
   async function readImportFile(input) {
@@ -2868,7 +2952,7 @@
       upsertPoliciesFromImport(imported.policies);
       app.state.settings.appliedTaskImportId = importId;
       await saveState();
-      showToast(`${imported.tasks.length}件のタスクを指定ファイルで上書きし、${imported.policies.length}件の方針を同期しました。`);
+      showToast(`${imported.tasks.length}件のタスクを指定ファイルで上書きし、${imported.policies.length}件の運営情報を同期しました。`);
     } catch {
       // 同梱インポートは初期投入用。失敗しても通常利用は止めない。
     }
@@ -2987,7 +3071,7 @@
     app.state.memos = Array.isArray(payload.memos) ? payload.memos.map(normalizeMemo) : app.state.memos;
     app.state.policies = Array.isArray(payload.policies) ? payload.policies.map(normalizePolicy) : app.state.policies;
     app.state.departments = normalizeDepartments(payload.departments, app.state.departments);
-    app.state.projects = Array.isArray(payload.projects) ? payload.projects : app.state.projects;
+    app.state.projects = [];
     app.state.deletedItems = Array.isArray(payload.deletedItems) ? payload.deletedItems.map(normalizeDeletedItem) : app.state.deletedItems;
     app.state.updatedAt = now;
   }
@@ -3020,7 +3104,7 @@
         status: task.status || task.状態 || "active",
         completedAt: task.completedAt || null,
         departmentId: matchDepartmentId(task.department || task.departmentName || task.category || task.categoryName || task.分類 || task.部門),
-        projectId: matchProjectId(task.project || task.projectName || task.プロジェクト)
+        projectId: ""
       })).filter((task) => task.title),
       memos: (source.memos || source.notes || []).map((memo) => ({
         title: memo.title || firstLine(memo.body || memo.content) || "メモ",
@@ -3032,7 +3116,7 @@
         dueDate: "",
         priority: normalizePriority(memo.priority || memo.優先度),
         departmentId: matchDepartmentId(memo.department || memo.departmentName || memo.category || memo.categoryName || memo.分類 || memo.部門),
-        projectId: matchProjectId(memo.project || memo.projectName || memo.プロジェクト)
+        projectId: ""
       })).filter((memo) => memo.body || memo.title),
       policies: (source.policies || []).map((policy) => ({
         title: policy.title || policy.name || policy.タイトル || "方針",
@@ -3062,7 +3146,7 @@
         dueDate: toDateInputValueFromUnknown(row.dueDate || row.DL || row.期限日),
         priority: normalizePriority(row.priority || row.優先度),
         departmentId: matchDepartmentId(row.department || row.category || row.分類 || row.部門),
-        projectId: matchProjectId(row.project || row.プロジェクト)
+        projectId: ""
       };
     }).filter((task) => task.title);
     return { tasks, memos: [], policies: [] };
@@ -3189,6 +3273,7 @@
   function buildPortableState() {
     return {
       ...app.state,
+      projects: [],
       memos: app.state.memos.map((memo) => ({
         ...memo,
         recordings: (memo.recordings || []).map((recording) => ({
@@ -3262,20 +3347,14 @@
     if (!sheet || !origin) {
       dialog.style.removeProperty("--sheet-origin-x");
       dialog.style.removeProperty("--sheet-origin-y");
-      dialog.style.removeProperty("--sheet-launch-x");
-      dialog.style.removeProperty("--sheet-launch-y");
       return;
     }
     const rect = sheet.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     const x = clampNumber(((origin.x - rect.left) / rect.width) * 100, -18, 118, 50);
     const y = clampNumber(((origin.y - rect.top) / rect.height) * 100, -12, 112, 8);
-    const dx = clampNumber(origin.x - (rect.left + rect.width / 2), -260, 260, 0);
-    const dy = clampNumber(origin.y - (rect.top + rect.height / 2), -340, 340, 0);
     dialog.style.setProperty("--sheet-origin-x", `${x}%`);
     dialog.style.setProperty("--sheet-origin-y", `${y}%`);
-    dialog.style.setProperty("--sheet-launch-x", `${dx}px`);
-    dialog.style.setProperty("--sheet-launch-y", `${dy}px`);
   }
 
   function renderSheetHeader(title, subtitle = "") {
@@ -3314,9 +3393,8 @@
   function renderPolicyPeriodField(start = "", end = "") {
     const month = monthKey(dateObject(start || end || todayIso()));
     return `
-      <div class="field policy-period-field" data-period-picker data-range-month="${escapeAttr(month)}">
-        <label for="policyPeriodText">期間</label>
-        <input id="policyPeriodText" class="period-display-input" type="text" readonly value="${escapeAttr(formatPolicyPeriodRange(start, end))}" placeholder="期間なし">
+      <div class="field policy-period-field" data-period-picker data-range-month="${escapeAttr(month)}" data-draft-start="${escapeAttr(start)}" data-draft-end="${escapeAttr(end)}" data-saved-start="${escapeAttr(start)}" data-saved-end="${escapeAttr(end)}">
+        <label>期間</label>
         <input id="periodStart" name="periodStart" type="hidden" value="${escapeAttr(start)}">
         <input id="periodEnd" name="periodEnd" type="hidden" value="${escapeAttr(end)}">
         <div class="period-picker" data-period-calendar>
@@ -3329,11 +3407,18 @@
   function renderPolicyPeriodCalendar(month, start = "", end = "") {
     const current = parseMonthKey(month || monthKey(new Date()));
     const days = buildCalendarDays(current.year, current.month);
+    const monthStart = toDateInputValue(new Date(current.year, current.month, 1));
+    const monthEnd = toDateInputValue(new Date(current.year, current.month + 1, 0));
+    const selectedDates = [...new Set([start, end].filter(Boolean))];
+    const beforeDates = selectedDates.filter((date) => date < monthStart).map(formatShortDate);
+    const afterDates = selectedDates.filter((date) => date > monthEnd).map(formatShortDate);
     return `
       <div class="period-picker-head">
-        <button class="mini-button" type="button" data-action="period-month-prev">前月</button>
+        <button class="mini-button month-nav-button" type="button" data-action="period-month-prev" aria-label="月を戻す">&lt;</button>
+        <span class="period-outside-date">${escapeHtml(beforeDates.join(" / "))}</span>
         <strong>${current.year}年${current.month + 1}月</strong>
-        <button class="mini-button" type="button" data-action="period-month-next">翌月</button>
+        <span class="period-outside-date">${escapeHtml(afterDates.join(" / "))}</span>
+        <button class="mini-button month-nav-button" type="button" data-action="period-month-next" aria-label="月を進める">&gt;</button>
       </div>
       <div class="period-picker-grid">
         ${["月", "火", "水", "木", "金", "土", "日"].map((day) => `<span>${day}</span>`).join("")}
@@ -3352,7 +3437,8 @@
         }).join("")}
       </div>
       <div class="period-picker-actions">
-        <span>${escapeHtml(formatPolicyPeriodRange(start, end) || "開始日を選んでください")}</span>
+        <span class="period-save-state">${escapeHtml(periodSaveStateLabel(start, end))}</span>
+        <button class="solid-button compact" type="button" data-action="save-policy-period">保存</button>
         <button class="mini-button" type="button" data-action="clear-policy-period">クリア</button>
       </div>
     `;
@@ -3371,40 +3457,55 @@
     const picker = button.closest("[data-period-picker]");
     if (!picker) return;
     const date = button.dataset.date || "";
-    const startInput = picker.querySelector('input[name="periodStart"]');
-    const endInput = picker.querySelector('input[name="periodEnd"]');
-    const start = startInput?.value || "";
-    const end = endInput?.value || "";
+    const start = picker.dataset.draftStart || "";
+    const end = picker.dataset.draftEnd || "";
     if (!start || end) {
-      if (startInput) startInput.value = date;
-      if (endInput) endInput.value = "";
+      picker.dataset.draftStart = date;
+      picker.dataset.draftEnd = "";
+    } else if (date === start) {
+      picker.dataset.draftEnd = date;
     } else if (date < start) {
-      if (startInput) startInput.value = date;
-      if (endInput) endInput.value = start;
+      picker.dataset.draftStart = date;
+      picker.dataset.draftEnd = start;
     } else {
-      if (endInput) endInput.value = date;
+      picker.dataset.draftEnd = date;
     }
     picker.dataset.rangeMonth = monthKey(dateObject(date));
     refreshPolicyPeriodPicker(picker);
   }
 
+  function savePolicyPeriod(button) {
+    const picker = button.closest("[data-period-picker]");
+    if (!picker) return;
+    const start = picker.dataset.draftStart || "";
+    const end = picker.dataset.draftEnd || "";
+    const startInput = picker.querySelector('input[name="periodStart"]');
+    const endInput = picker.querySelector('input[name="periodEnd"]');
+    if (startInput) startInput.value = start;
+    if (endInput) endInput.value = end;
+    picker.dataset.savedStart = start;
+    picker.dataset.savedEnd = end;
+    refreshPolicyPeriodPicker(picker);
+    showToast("期間を保存しました。");
+  }
+
   function clearPolicyPeriod(button) {
     const picker = button.closest("[data-period-picker]");
     if (!picker) return;
-    const startInput = picker.querySelector('input[name="periodStart"]');
-    const endInput = picker.querySelector('input[name="periodEnd"]');
-    if (startInput) startInput.value = "";
-    if (endInput) endInput.value = "";
+    picker.dataset.draftStart = "";
+    picker.dataset.draftEnd = "";
     refreshPolicyPeriodPicker(picker);
   }
 
   function refreshPolicyPeriodPicker(picker) {
-    const start = picker.querySelector('input[name="periodStart"]')?.value || "";
-    const end = picker.querySelector('input[name="periodEnd"]')?.value || "";
-    const display = picker.querySelector("#policyPeriodText");
+    const start = picker.dataset.draftStart || "";
+    const end = picker.dataset.draftEnd || "";
     const calendar = picker.querySelector("[data-period-calendar]");
-    if (display) display.value = formatPolicyPeriodRange(start, end);
     if (calendar) calendar.innerHTML = renderPolicyPeriodCalendar(picker.dataset.rangeMonth, start, end);
+  }
+
+  function periodSaveStateLabel(start = "", end = "") {
+    return start || end ? "期間あり" : "期間なし";
   }
 
   function formatPolicyPeriodRange(start = "", end = "") {
@@ -3430,22 +3531,38 @@
       ${app.state.departments.map((department) =>
         `<option value="dept:${escapeAttr(department.id)}"${selected(current, `dept:${department.id}`)}>${CLASSIFICATION_LABEL}: ${escapeHtml(department.name)}</option>`
       ).join("")}
-      ${app.state.projects.map((project) =>
-        `<option value="project:${escapeAttr(project.id)}"${selected(current, `project:${project.id}`)}>PJ: ${escapeHtml(project.name)}</option>`
-      ).join("")}
     `;
-  }
-
-  function renderProjectOptions(current) {
-    return `<option value="">未設定</option>${app.state.projects.map((project) =>
-      `<option value="${escapeAttr(project.id)}"${selected(current, project.id)}>${escapeHtml(project.name)}</option>`
-    ).join("")}`;
   }
 
   function renderMemoOptions(currentIds) {
     return app.state.memos.map((memo) =>
       `<option value="${escapeAttr(memo.id)}"${currentIds.includes(memo.id) ? " selected" : ""}>${escapeHtml(memo.title)}</option>`
     ).join("");
+  }
+
+  function renderMemoPicker(currentIds) {
+    const current = new Set(currentIds || []);
+    const memos = [...app.state.memos].sort((a, b) =>
+      Number(current.has(b.id)) - Number(current.has(a.id)) ||
+      String(b.updatedAt).localeCompare(String(a.updatedAt))
+    );
+    if (!memos.length) return `<p class="body-preview">関連付けできるメモはまだありません。</p>`;
+    return `
+      <div class="memo-picker">
+        ${memos.map((memo) => {
+          const preview = truncate(getMemoPreviewText(memo), 120);
+          return `
+            <label class="memo-picker-item ${current.has(memo.id) ? "is-linked" : ""}">
+              <input type="checkbox" name="memoIds" value="${escapeAttr(memo.id)}"${current.has(memo.id) ? " checked" : ""}>
+              <span>
+                <strong>${escapeHtml(memo.title || "メモ")}</strong>
+                ${preview ? `<small>${escapeHtml(preview)}</small>` : ""}
+              </span>
+            </label>
+          `;
+        }).join("")}
+      </div>
+    `;
   }
 
   function renderTaskOptions(currentIds) {
@@ -3460,7 +3577,7 @@
       Number(current.has(b.id)) - Number(current.has(a.id))
     );
     return `
-      <div class="task-picker">
+      <div id="memoTasks" class="task-picker">
         <input id="memoTaskSearch" type="search" data-task-search placeholder="タスク名で検索（ひらがな/カタカナ対応）" autocomplete="off">
         <div class="task-picker-list" data-task-picker-list>
           ${tasks.map((task) => {
@@ -3555,16 +3672,20 @@
     }
 
     const monthDistance = monthsBetween(start, date);
-    if (monthDistance % recurrence.interval !== 0) return false;
+    const interval = recurrence.type === "monthly-nth" ? 1 : recurrence.interval;
+    if (monthDistance % interval !== 0) return false;
 
     if (recurrence.type === "monthly-day") {
       return target.getDate() === recurrence.monthDay;
+    }
+    if (recurrence.type === "monthly-start") {
+      return target.getDate() === 1;
     }
     if (recurrence.type === "monthly-end") {
       return target.getDate() === lastDayOfMonth(target.getFullYear(), target.getMonth());
     }
     if (recurrence.type === "monthly-nth") {
-      return target.getDay() === recurrence.weekday && nthWeekdayOfMonth(target) === recurrence.ordinal;
+      return target.getDay() === recurrence.weekday && recurrence.nthOrdinals.includes(nthWeekdayOfMonth(target));
     }
     return false;
   }
@@ -3592,8 +3713,9 @@
       return `${recurrence.interval > 1 ? `${recurrence.interval}週ごと ` : ""}${days}曜`;
     }
     if (recurrence.type === "monthly-day") return `毎月${recurrence.monthDay}日`;
+    if (recurrence.type === "monthly-start") return "毎月月初";
     if (recurrence.type === "monthly-end") return "毎月月末";
-    if (recurrence.type === "monthly-nth") return `毎月第${recurrence.ordinal}${weekdayLabels[recurrence.weekday]}曜`;
+    if (recurrence.type === "monthly-nth") return `毎月第${recurrence.nthOrdinals.join(",")} ${weekdayLabels[recurrence.weekday]}曜`;
     if (recurrence.type === "custom") return `カスタム${recurrence.customDates.length}日`;
     return recurrenceLabels[recurrence.type] || "";
   }
@@ -3604,7 +3726,7 @@
   }
 
   function shouldShowMemos(task, linkedMemos) {
-    return linkedMemos.length && app.state.settings.showLinkedMemos && task.showLinkedMemos !== false;
+    return Boolean(linkedMemos.length);
   }
 
   function summarizeMemo(memo) {
@@ -3658,7 +3780,6 @@
     if (!filter || filter === "all") return true;
     if (filter === "no-dept") return !task.departmentId;
     if (filter.startsWith("dept:")) return task.departmentId === filter.slice(5);
-    if (filter.startsWith("project:")) return task.projectId === filter.slice(8);
     return true;
   }
 
@@ -3680,7 +3801,6 @@
     if (filter === "due") return kind === "task" ? Boolean(item.dueDate) : false;
     if (filter === "no-dept") return !item.departmentId;
     if (filter.startsWith("dept:")) return item.departmentId === filter.slice(5);
-    if (filter.startsWith("project:")) return kind !== "policy" && item.projectId === filter.slice(8);
     return true;
   }
 
@@ -3698,7 +3818,6 @@
     if (!filter || filter === "all") return true;
     if (filter === "no-dept") return !policy.departmentId;
     if (filter.startsWith("dept:")) return policy.departmentId === filter.slice(5);
-    if (filter.startsWith("project:")) return false;
     return true;
   }
 
@@ -3706,7 +3825,6 @@
     if (!filter || filter === "all") return true;
     if (filter === "no-dept") return !period.departmentId;
     if (filter.startsWith("dept:")) return period.departmentId === filter.slice(5);
-    if (filter.startsWith("project:")) return period.projectId === filter.slice(8);
     return true;
   }
 
@@ -3731,20 +3849,7 @@
         departmentId: policy.departmentId || "",
         projectId: ""
       }));
-    const projectPeriods = app.state.projects
-      .filter((project) => project.startDate || project.endDate)
-      .map((project) => ({
-        id: project.id,
-        title: project.name,
-        start: project.startDate || project.endDate,
-        end: project.endDate || project.startDate,
-        type: "プロジェクト",
-        summary: firstNonEmpty(project.purpose, project.name),
-        source: "project",
-        departmentId: project.departmentId || "",
-        projectId: project.id
-      }));
-    return [...policyPeriods, ...projectPeriods].filter((period) => period.start && period.end);
+    return policyPeriods.filter((period) => period.start && period.end);
   }
 
   function firstNonEmpty(...values) {
@@ -3878,12 +3983,48 @@
   function toDateInputValueFromUnknown(value) {
     if (!value) return "";
     const text = String(value).trim();
+    const flexible = parseFlexibleDate(text);
+    if (flexible) return flexible;
     if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
     const slash = text.match(/^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})$/);
     if (slash) return `${slash[1]}-${String(slash[2]).padStart(2, "0")}-${String(slash[3]).padStart(2, "0")}`;
     const md = text.match(/^(\d{1,2})[\/月](\d{1,2})/);
     if (md) return dateFromMonthDay(md[1], md[2]);
     return "";
+  }
+
+  function parseFlexibleDateList(text) {
+    return [...new Set(String(text || "")
+      .split(/[\n,、\s]+/)
+      .map(parseFlexibleDate)
+      .filter(Boolean))]
+      .sort();
+  }
+
+  function parseFlexibleDate(value) {
+    const text = String(value || "").trim().normalize("NFKC");
+    if (!text) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    let match = text.match(/^(\d{4})[\/.\-年](\d{1,2})[\/.\-月](\d{1,2})日?$/);
+    if (match) return buildIsoDate(match[1], match[2], match[3]);
+    match = text.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (match) return buildIsoDate(match[1], match[2], match[3]);
+    match = text.match(/^(\d{1,2})[\/.\-月](\d{1,2})日?$/);
+    if (match) return dateFromMonthDay(match[1], match[2]);
+    match = text.match(/^(\d{2})(\d{2})$/);
+    if (match) return dateFromMonthDay(match[1], match[2]);
+    return "";
+  }
+
+  function buildIsoDate(year, month, day) {
+    const candidate = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const date = dateObject(candidate);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.getFullYear() === Number(year) &&
+      date.getMonth() + 1 === Number(month) &&
+      date.getDate() === Number(day)
+      ? candidate
+      : "";
   }
 
   function parseJapaneseDate(text) {
@@ -3953,10 +4094,19 @@
       .sort((a, b) => a - b);
   }
 
+  function normalizeNthOrdinals(values) {
+    const source = Array.isArray(values) ? values : [values];
+    const normalized = [...new Set(source
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value >= 1 && value <= 5))]
+      .sort((a, b) => a - b);
+    return normalized.length ? normalized : [2];
+  }
+
   function normalizeDateList(values) {
     return [...new Set((Array.isArray(values) ? values : [])
       .map(String)
-      .map((value) => value.trim())
+      .map((value) => parseFlexibleDate(value.trim()) || value.trim())
       .filter(isIsoDate))]
       .sort();
   }
@@ -4006,12 +4156,6 @@
     if (found) return found.id;
     const legacyId = legacyDefaultDepartmentIdsByName.get(text);
     return legacyId && findById(app.state.departments, legacyId) ? legacyId : "";
-  }
-
-  function matchProjectId(name) {
-    if (!name) return "";
-    const found = app.state.projects.find((project) => project.name === name);
-    return found?.id || "";
   }
 
   function findById(collection, id) {
