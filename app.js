@@ -78,6 +78,7 @@
     recordingStopResolve: null,
     recognition: null,
     dialogOrigin: null,
+    isComposingText: false,
     toastTimer: 0
   };
 
@@ -106,6 +107,8 @@
     document.body.addEventListener("click", handleClick);
     document.body.addEventListener("change", handleChange);
     document.body.addEventListener("input", handleInput);
+    document.body.addEventListener("compositionstart", handleCompositionStart);
+    document.body.addEventListener("compositionend", handleCompositionEnd);
     document.body.addEventListener("keydown", handleKeydown);
     document.addEventListener("submit", handleSubmit);
     document.addEventListener("visibilitychange", () => {
@@ -251,7 +254,7 @@
       assignee: task.assignee || "",
       actionDate: task.actionDate || "",
       dueDate: task.dueDate || "",
-      priority: priorityMeta[task.priority] ? task.priority : "NONE",
+      priority: normalizeTaskPriority(task.priority),
       status: task.status || "active",
       departmentId: task.departmentId || "",
       projectId: task.projectId || "",
@@ -288,8 +291,8 @@
       decisions: memo.decisions || "",
       nextActions: memo.nextActions || "",
       transcript: memo.transcript || "",
-      dueDate: memo.dueDate || "",
-      priority: priorityMeta[memo.priority] ? memo.priority : "NONE",
+      dueDate: "",
+      priority: normalizeTaskPriority(memo.priority),
       departmentId: memo.departmentId || "",
       projectId: memo.projectId || "",
       taskIds: Array.isArray(memo.taskIds) ? memo.taskIds : [],
