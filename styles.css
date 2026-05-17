@@ -519,6 +519,13 @@ label {
   font-weight: 850;
 }
 
+.form-hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
 input,
 textarea,
 select {
@@ -538,6 +545,85 @@ input[type="date"] {
   min-width: 0;
   -webkit-appearance: none;
   appearance: none;
+}
+
+.period-display-input {
+  cursor: default;
+  background: #fffdf9;
+}
+
+.policy-period-field {
+  align-self: start;
+}
+
+.period-picker {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 9px;
+}
+
+.period-picker-head,
+.period-picker-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.period-picker-head strong,
+.period-picker-actions span {
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.period-picker-actions {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.period-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.period-picker-grid > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-align: center;
+}
+
+.period-date-button {
+  min-height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.period-date-button.is-muted {
+  color: #a6afaa;
+}
+
+.period-date-button.is-in-range {
+  background: var(--green-soft);
+}
+
+.period-date-button.is-start,
+.period-date-button.is-end {
+  border-color: var(--green);
+  background: var(--green);
+  color: #fff;
+}
+
+.period-date-button.is-today:not(.is-start):not(.is-end) {
+  border-color: var(--calendar-selected);
 }
 
 textarea {
@@ -1439,6 +1525,36 @@ audio {
 .list-editor {
   display: grid;
   gap: 8px;
+}
+
+.list-editor.is-collapsed {
+  display: none;
+}
+
+.collapse-toggle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 0;
+  text-align: left;
+}
+
+.collapse-mark {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--green);
+  display: inline-grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .list-row {

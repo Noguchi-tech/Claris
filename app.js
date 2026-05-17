@@ -10,6 +10,7 @@
   const PERIOD_LINE_CLASS_COUNT = 6;
   const CLASSIFICATION_LABEL = "分類";
   const ADD_DEPARTMENT_VALUE = "__add_department__";
+  const defaultPolicyTypes = ["方針", "月次", "週次", "半期", "分類", "施策", "イベント", "在庫", "売場", "商売計画"];
 
   const priorityMeta = {
     P1: { label: "最優先", className: "priority-p1" },
@@ -173,6 +174,7 @@
         workerName: "",
         showCompleted: true,
         showLinkedMemos: true,
+        policyTypes: [...defaultPolicyTypes],
         appliedTaskImportId: ""
       },
       ui: {
@@ -217,6 +219,7 @@
     merged.tasks = merged.tasks.map(normalizeTask);
     merged.memos = merged.memos.map(normalizeMemo);
     merged.policies = merged.policies.map(normalizePolicy);
+    merged.settings.policyTypes = normalizePolicyTypes(merged.settings.policyTypes);
     merged.deletedItems = merged.deletedItems.map(normalizeDeletedItem);
     return merged;
   }
@@ -263,6 +266,9 @@
       showLinkedMemos: task.showLinkedMemos !== false,
       recurrence: normalizeRecurrence(task.recurrence),
       completedDates: normalizeDateList(task.completedDates),
+      generatedFromTaskId: task.generatedFromTaskId || "",
+      generatedFromDate: task.generatedFromDate || "",
+      generatedNextTaskId: task.generatedNextTaskId || "",
       createdAt: task.createdAt || nowIso(),
       updatedAt: task.updatedAt || nowIso(),
       completedAt: task.completedAt || null
@@ -326,6 +332,20 @@
     const text = String(type || "").trim();
     if (text === "部門") return CLASSIFICATION_LABEL;
     return text || "方針";
+  }
+
+  function normalizePolicyTypes(types) {
+    const source = Array.isArray(types) ? types : defaultPolicyTypes;
+    const values = source
+      .map((type) => normalizePolicyType(typeof type === "string" ? type : type?.name))
+      .filter(Boolean);
+    return [...new Set(values)].length ? [...new Set(values)] : [...defaultPolicyTypes];
+  }
+
+  function getPolicyTypes(current = "") {
+    const types = normalizePolicyTypes(app.state?.settings?.policyTypes);
+    const normalizedCurrent = normalizePolicyType(current || "");
+    return normalizedCurrent && !types.includes(normalizedCurrent) ? types.concat(normalizedCurrent) : types;
   }
 
   function normalizeTaskPriority(priority) {
@@ -621,6 +641,7 @@
     if (/月/.test(text)) return "月";
     if (/半期/.test(text)) return "半";
     if (/プロジェクト|PJ/i.test(text)) return "PJ";
+    if (/イベント/.test(text)) return "イベ";
     return truncate(text, 2);
   }
 
@@ -884,6 +905,8 @@
           ${memoSummary}
           <div class="card-actions">
             <button class="mini-button" type="button" data-action="move-today" data-id="${escapeAttr(task.id)}">今日</button>
+            <button class="mini-button" type="button" data-action="task-to-memo" data-id="${escapeAttr(task.id)}">メモ化</button>
+            <button class="mini-button" type="button" data-action="task-to-policy" data-id="${escapeAttr(task.id)}">方針化</button>
             <button class="mini-button" type="button" data-action="duplicate-task" data-id="${escapeAttr(task.id)}">複製</button>
             <button class="mini-button" type="button" data-action="delete-task" data-id="${escapeAttr(task.id)}">削除</button>
           </div>
@@ -913,6 +936,7 @@
         ${previewText ? `<button class="body-preview body-preview-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">${escapeHtml(previewText)}</button>` : ""}
         <div class="card-actions">
           <button class="mini-button" type="button" data-action="memo-to-task" data-id="${escapeAttr(memo.id)}">タスク化</button>
+          <button class="mini-button" type="button" data-action="memo-to-policy" data-id="${escapeAttr(memo.id)}">方針化</button>
           <button class="mini-button" type="button" data-action="delete-memo" data-id="${escapeAttr(memo.id)}">削除</button>
         </div>
       </article>
@@ -947,6 +971,8 @@
         ${content ? `<p class="body-preview">${escapeHtml(truncate(content, 150))}</p>` : ""}
         <div class="card-actions">
           <button class="mini-button" type="button" data-action="edit-policy" data-id="${escapeAttr(policy.id)}">編集</button>
+          <button class="mini-button" type="button" data-action="policy-to-task" data-id="${escapeAttr(policy.id)}">タスク化</button>
+          <button class="mini-button" type="button" data-action="policy-to-memo" data-id="${escapeAttr(policy.id)}">メモ化</button>
           <button class="mini-button" type="button" data-action="delete-policy" data-id="${escapeAttr(policy.id)}">削除</button>
         </div>
       </article>
@@ -987,6 +1013,15 @@
     if (action === "edit-task") openTaskForm(findById(app.state.tasks, id));
     if (action === "edit-memo") openMemoForm(findById(app.state.memos, id));
     if (action === "edit-policy") openPolicyForm(findById(app.state.policies, id));
+    if (action === "task-to-memo") openMemoFromTask(id);
+    if (action === "task-to-policy") openPolicyFromTask(id);
+    if (action === "memo-to-policy") openPolicyFromMemo(id);
+    if (action === "policy-to-task") openTaskFromPolicy(id);
+    if (action === "policy-to-memo") openMemoFromPolicy(id);
+    if (action === "period-month-prev") changePolicyPeriodMonth(button, -1);
+    if (action === "period-month-next") changePolicyPeriodMonth(button, 1);
+    if (action === "select-period-date") selectPolicyPeriodDate(button);
+    if (action === "clear-policy-period") clearPolicyPeriod(button);
     if (action === "toggle-task") await toggleTask(id, button.dataset.date || "");
     if (action === "move-today") await moveTaskToToday(id);
     if (action === "assign-today-priority") await assignTaskToToday(id, button.dataset.priority);
@@ -1017,7 +1052,9 @@
     if (action === "export-master-json") exportMasterJson();
     if (action === "run-import") await runImportFromDialog();
     if (action === "add-department") addSettingsRow("department");
+    if (action === "add-policy-type") addSettingsRow("policyType");
     if (action === "add-project") addSettingsRow("project");
+    if (action === "toggle-settings-panel") toggleSettingsPanel(button);
     if (action === "move-settings-row") moveSettingsRow(button);
     if (action === "remove-settings-row") button.closest(".list-row")?.remove();
   }
@@ -1249,16 +1286,16 @@
     const existing = task ? normalizeTask(task) : null;
     const value = {
       id: existing?.id || "",
-      title: existing?.title || "",
-      description: existing?.description || "",
-      assignee: existing?.assignee || "",
+      title: existing?.title || defaults.title || "",
+      description: existing?.description || defaults.description || "",
+      assignee: existing?.assignee || defaults.assignee || "",
       actionDate: existing?.actionDate || defaults.actionDate || "",
-      dueDate: existing?.dueDate || "",
+      dueDate: existing?.dueDate || defaults.dueDate || "",
       priority: normalizeTaskPriority(existing?.priority || defaults.priority || "SUB"),
-      departmentId: existing?.departmentId || "",
-      projectId: existing?.projectId || "",
-      estimatedMinutes: existing?.estimatedMinutes || "",
-      memoIds: existing?.memoIds || [],
+      departmentId: existing?.departmentId || defaults.departmentId || "",
+      projectId: existing?.projectId || defaults.projectId || "",
+      estimatedMinutes: existing?.estimatedMinutes || defaults.estimatedMinutes || "",
+      memoIds: existing?.memoIds || defaults.memoIds || [],
       showLinkedMemos: existing?.showLinkedMemos !== false,
       recurrence: normalizeRecurrence(existing?.recurrence || defaults.recurrence || {})
     };
@@ -1307,6 +1344,11 @@
           <div class="field">
             <label for="taskMemos">関連メモ</label>
             <select id="taskMemos" name="memoIds" multiple size="4">${renderMemoOptions(value.memoIds)}</select>
+            <div class="toolbar">
+              ${value.id
+                ? `<button class="ghost-button compact" type="button" data-action="task-to-memo" data-id="${escapeAttr(value.id)}">新しい関連メモ</button>`
+                : `<span class="form-hint">関連メモの新規作成は、タスク保存後に使えます。</span>`}
+            </div>
           </div>
           <label class="toolbar">
             <input name="showLinkedMemos" type="checkbox" ${value.showLinkedMemos ? "checked" : ""}>
@@ -1334,16 +1376,30 @@
     input.value = date || "";
   }
 
-  function openMemoForm(memo = null) {
+  function openMemoForm(memo = null, defaults = {}) {
     const existing = memo ? normalizeMemo(memo) : null;
+    const value = {
+      id: existing?.id || "",
+      title: existing?.title || defaults.title || "",
+      body: existing?.body || defaults.body || "",
+      agenda: existing?.agenda || defaults.agenda || "",
+      decisions: existing?.decisions || defaults.decisions || "",
+      nextActions: existing?.nextActions || defaults.nextActions || "",
+      transcript: existing?.transcript || defaults.transcript || "",
+      priority: normalizeTaskPriority(existing?.priority || defaults.priority || "SUB"),
+      departmentId: existing?.departmentId || defaults.departmentId || "",
+      projectId: existing?.projectId || defaults.projectId || "",
+      taskIds: existing?.taskIds || defaults.taskIds || [],
+      recordings: existing?.recordings || []
+    };
     resetRecordingDraft();
     openSheet(`
       <div class="sheet">
         ${renderSheetHeader(existing ? "メモ編集" : "メモ追加", "走り書きから始めて、後で議題や決定事項を整えられます。")}
-        <form id="memoForm" class="form-grid" data-id="${escapeAttr(existing?.id || "")}">
+        <form id="memoForm" class="form-grid" data-id="${escapeAttr(value.id)}">
           <div class="field">
             <label for="memoTitle">タイトル</label>
-            <input id="memoTitle" name="title" value="${escapeAttr(existing?.title || "")}" autocomplete="off">
+            <input id="memoTitle" name="title" value="${escapeAttr(value.title)}" autocomplete="off">
           </div>
           <section class="memo-recording-panel">
             <div class="section-head">
@@ -1358,7 +1414,7 @@
           </section>
           <div class="field">
             <label for="memoBody">本文</label>
-            <textarea id="memoBody" name="body" required>${escapeHtml(existing?.body || "")}</textarea>
+            <textarea id="memoBody" name="body" required>${escapeHtml(value.body)}</textarea>
           </div>
           <div class="toolbar">
             <button class="ghost-button compact" type="button" data-action="classify-memo-form">本文から自動判定</button>
@@ -1366,44 +1422,44 @@
           <div class="field-inline">
             <div class="field">
               <label for="memoAgenda">議題</label>
-              <textarea id="memoAgenda" name="agenda">${escapeHtml(existing?.agenda || "")}</textarea>
+              <textarea id="memoAgenda" name="agenda">${escapeHtml(value.agenda)}</textarea>
             </div>
             <div class="field">
               <label for="memoDecisions">決まったこと</label>
-              <textarea id="memoDecisions" name="decisions">${escapeHtml(existing?.decisions || "")}</textarea>
+              <textarea id="memoDecisions" name="decisions">${escapeHtml(value.decisions)}</textarea>
             </div>
             <div class="field">
               <label for="memoNextActions">ネクストアクション</label>
-              <textarea id="memoNextActions" name="nextActions">${escapeHtml(existing?.nextActions || "")}</textarea>
+              <textarea id="memoNextActions" name="nextActions">${escapeHtml(value.nextActions)}</textarea>
             </div>
           </div>
           <div class="field">
             <label for="memoTranscript">文字起こし</label>
-            <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(existing?.transcript || "")}</textarea>
+            <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(value.transcript)}</textarea>
           </div>
-          ${existing?.recordings?.length ? `
+          ${value.recordings.length ? `
             <div class="field">
               <label>録音</label>
-              <div class="audio-list">${existing.recordings.map(renderRecording).join("")}</div>
+              <div class="audio-list">${value.recordings.map(renderRecording).join("")}</div>
             </div>
           ` : ""}
           <div class="field-inline">
             <div class="field">
               <label for="memoPriority">優先度</label>
-              <select id="memoPriority" name="priority">${renderPriorityOptions(existing?.priority || "SUB")}</select>
+              <select id="memoPriority" name="priority">${renderPriorityOptions(value.priority)}</select>
             </div>
             <div class="field">
               <label for="memoDepartment">${CLASSIFICATION_LABEL}</label>
-              <select id="memoDepartment" name="departmentId" data-current-value="${escapeAttr(existing?.departmentId || "")}">${renderDepartmentOptions(existing?.departmentId || "")}</select>
+              <select id="memoDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
             </div>
           </div>
           <div class="field">
             <label for="memoProject">プロジェクト</label>
-            <select id="memoProject" name="projectId">${renderProjectOptions(existing?.projectId || "")}</select>
+            <select id="memoProject" name="projectId">${renderProjectOptions(value.projectId)}</select>
           </div>
           <div class="field">
             <label for="memoTasks">関連タスク</label>
-            ${renderTaskPicker(existing?.taskIds || [])}
+            ${renderTaskPicker(value.taskIds)}
           </div>
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
@@ -1415,39 +1471,45 @@
     updateRecordingButtons();
   }
 
-  function openPolicyForm(policy = null) {
-    const existing = policy || {};
+  function openPolicyForm(policy = null, defaults = {}) {
+    const existing = policy ? normalizePolicy(policy) : null;
+    const value = {
+      id: existing?.id || "",
+      title: existing?.title || defaults.title || "",
+      type: normalizePolicyType(existing?.type || defaults.type || "方針"),
+      periodStart: existing?.periodStart || defaults.periodStart || "",
+      periodEnd: existing?.periodEnd || defaults.periodEnd || "",
+      departmentId: existing?.departmentId || defaults.departmentId || "",
+      content: getPolicyContent(existing || defaults),
+      taskIds: existing?.taskIds || defaults.taskIds || [],
+      memoIds: existing?.memoIds || defaults.memoIds || []
+    };
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader(policy ? "方針・施策編集" : "方針・施策追加", "内容をまとめて残します。")}
-        <form id="policyForm" class="form-grid" data-id="${escapeAttr(existing.id || "")}">
+        ${renderSheetHeader(existing ? "方針・施策編集" : "方針・施策追加", "内容をまとめて残します。")}
+        <form id="policyForm" class="form-grid" data-id="${escapeAttr(value.id)}">
+          ${value.taskIds.map((id) => `<input type="hidden" name="taskIds" value="${escapeAttr(id)}">`).join("")}
+          ${value.memoIds.map((id) => `<input type="hidden" name="memoIds" value="${escapeAttr(id)}">`).join("")}
           <div class="field">
             <label for="policyTitle">タイトル</label>
-            <input id="policyTitle" name="title" required value="${escapeAttr(existing.title || "")}" autocomplete="off">
+            <input id="policyTitle" name="title" required value="${escapeAttr(value.title)}" autocomplete="off">
           </div>
           <div class="field-inline">
             <div class="field">
               <label for="policyType">種別</label>
               <select id="policyType" name="type">
-                ${["月次", "週次", "半期", "分類", "施策", "イベント", "在庫", "売場", "商売計画"].map((type) => `<option value="${type}"${selected(existing.type, type)}>${type}</option>`).join("")}
+                ${renderPolicyTypeOptions(value.type)}
               </select>
             </div>
-            <div class="field">
-              <label for="periodStart">開始</label>
-              <input id="periodStart" name="periodStart" type="date" value="${escapeAttr(existing.periodStart || "")}">
-            </div>
-            <div class="field">
-              <label for="periodEnd">終了</label>
-              <input id="periodEnd" name="periodEnd" type="date" value="${escapeAttr(existing.periodEnd || "")}">
-            </div>
+            ${renderPolicyPeriodField(value.periodStart, value.periodEnd)}
           </div>
             <div class="field">
               <label for="policyDepartment">${CLASSIFICATION_LABEL}</label>
-            <select id="policyDepartment" name="departmentId" data-current-value="${escapeAttr(existing.departmentId || "")}">${renderDepartmentOptions(existing.departmentId || "")}</select>
+            <select id="policyDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
             </div>
           <div class="field">
             <label for="policyContent">内容</label>
-            <textarea id="policyContent" name="content">${escapeHtml(getPolicyContent(existing))}</textarea>
+            <textarea id="policyContent" name="content">${escapeHtml(value.content)}</textarea>
           </div>
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
@@ -1888,8 +1950,8 @@
       policy: content,
       actions: "",
       notes: "",
-      taskIds: existing?.taskIds || [],
-      memoIds: existing?.memoIds || [],
+      taskIds: data.getAll("taskIds").map(String),
+      memoIds: data.getAll("memoIds").map(String),
       createdAt: existing?.createdAt || now,
       updatedAt: now
     });
@@ -1902,26 +1964,64 @@
   async function toggleTask(id, date = "") {
     const task = findById(app.state.tasks, id);
     if (!task) return;
-    if (hasRecurrence(task) && date && taskOccursOnDate(task, date)) {
-      const dates = new Set(task.completedDates || []);
-      if (dates.has(date)) dates.delete(date);
-      else dates.add(date);
-      task.completedDates = [...dates].sort();
-      task.updatedAt = nowIso();
-      await saveState();
-      render();
-      return;
-    }
     if (task.status === "completed") {
+      removeGeneratedNextTask(task);
       task.status = "active";
       task.completedAt = null;
     } else {
       task.status = "completed";
       task.completedAt = nowIso();
+      createNextRecurringTask(task, date || task.actionDate || todayIso());
     }
     task.updatedAt = nowIso();
     await saveState();
     render();
+  }
+
+  function createNextRecurringTask(task, completedDate) {
+    if (!hasRecurrence(task) || task.generatedNextTaskId) return;
+    const nextDate = getNextRecurrenceDate(task, completedDate);
+    if (!nextDate) return;
+    const now = nowIso();
+    const next = normalizeTask({
+      ...task,
+      id: uid("task"),
+      actionDate: nextDate,
+      dueDate: shiftDueDateForNextTask(task, nextDate, completedDate),
+      status: "active",
+      completedAt: null,
+      completedDates: [],
+      generatedFromTaskId: task.id,
+      generatedFromDate: completedDate,
+      generatedNextTaskId: "",
+      createdAt: now,
+      updatedAt: now
+    });
+    if (SINGLE_SLOT_PRIORITIES.includes(next.priority) && getPriorityOccupants(next.actionDate, next.priority, [task.id]).length) {
+      next.priority = findAvailablePriority(next.actionDate, next.id, [next.priority]);
+    }
+    app.state.tasks.push(next);
+    task.generatedNextTaskId = next.id;
+  }
+
+  function shiftDueDateForNextTask(task, nextActionDate, completedDate) {
+    if (!task.dueDate || !isIsoDate(task.dueDate)) return "";
+    const baseDate = isIsoDate(task.actionDate) ? task.actionDate : completedDate;
+    if (!isIsoDate(baseDate)) return task.dueDate;
+    return addDays(nextActionDate, daysBetween(baseDate, task.dueDate));
+  }
+
+  function removeGeneratedNextTask(task) {
+    const nextId = task.generatedNextTaskId;
+    if (!nextId) return;
+    const next = findById(app.state.tasks, nextId);
+    if (next && next.generatedFromTaskId === task.id) {
+      app.state.tasks = app.state.tasks.filter((item) => item.id !== nextId);
+      app.state.memos.forEach((memo) => {
+        memo.taskIds = memo.taskIds.filter((taskId) => taskId !== nextId);
+      });
+    }
+    task.generatedNextTaskId = "";
   }
 
   function openTaskDeleteConfirm(id) {
@@ -2102,7 +2202,7 @@
     if (!memo) return;
     openTaskForm(null, {
       title: memo.nextActions || memo.title,
-      priority: memo.priority,
+      priority: normalizeTaskPriority(memo.priority),
       departmentId: memo.departmentId,
       projectId: memo.projectId,
       memoIds: [memo.id]
@@ -2117,6 +2217,81 @@
       option.selected = option.value === memo.id;
     });
     updateTaskPriorityPreview(form);
+  }
+
+  function openMemoFromTask(id) {
+    const task = findById(app.state.tasks, id);
+    if (!task) return;
+    openMemoForm(null, {
+      title: task.title || "タスクメモ",
+      body: buildTaskReferenceText(task),
+      priority: task.priority,
+      departmentId: task.departmentId,
+      projectId: task.projectId,
+      taskIds: [task.id]
+    });
+  }
+
+  function openPolicyFromTask(id) {
+    const task = findById(app.state.tasks, id);
+    if (!task) return;
+    openPolicyForm(null, {
+      title: task.title || "タスクから方針",
+      type: "施策",
+      periodStart: task.actionDate || "",
+      periodEnd: task.dueDate || task.actionDate || "",
+      departmentId: task.departmentId,
+      policy: buildTaskReferenceText(task),
+      taskIds: [task.id],
+      memoIds: task.memoIds || []
+    });
+  }
+
+  function openPolicyFromMemo(id) {
+    const memo = findById(app.state.memos, id);
+    if (!memo) return;
+    openPolicyForm(null, {
+      title: memo.title || "メモから方針",
+      type: "方針",
+      departmentId: memo.departmentId,
+      policy: getMemoPreviewText(memo) || memo.body || memo.title,
+      memoIds: [memo.id],
+      taskIds: memo.taskIds || []
+    });
+  }
+
+  function openTaskFromPolicy(id) {
+    const policy = findById(app.state.policies, id);
+    if (!policy) return;
+    openTaskForm(null, {
+      title: policy.title || "方針タスク",
+      actionDate: policy.periodStart || app.state.ui.selectedDate || todayIso(),
+      dueDate: policy.periodEnd || "",
+      priority: "SUB",
+      departmentId: policy.departmentId,
+      memoIds: policy.memoIds || []
+    });
+  }
+
+  function openMemoFromPolicy(id) {
+    const policy = findById(app.state.policies, id);
+    if (!policy) return;
+    openMemoForm(null, {
+      title: policy.title || "方針メモ",
+      body: getPolicyContent(policy) || policy.title,
+      priority: "SUB",
+      departmentId: policy.departmentId,
+      taskIds: policy.taskIds || []
+    });
+  }
+
+  function buildTaskReferenceText(task) {
+    return [
+      task.description,
+      task.actionDate ? `実施: ${formatShortDate(task.actionDate)}` : "",
+      task.dueDate ? `DL: ${formatShortDate(task.dueDate)}` : "",
+      task.assignee ? `担当: ${task.assignee}` : ""
+    ].filter(Boolean).join("\n") || task.title || "";
   }
 
   async function saveQuickMemo() {
@@ -2404,21 +2579,42 @@
               タスクにメモ要約を表示
             </label>
           </section>
-          <section class="settings-block">
+          <section class="settings-block settings-collapsible">
             <div class="section-head">
-              <h2 class="section-title">${CLASSIFICATION_LABEL}</h2>
+              <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="departmentRows" aria-expanded="false">
+                <span class="collapse-mark">＋</span>
+                <span class="section-title">${CLASSIFICATION_LABEL}</span>
+                <span class="section-count">${app.state.departments.length}件</span>
+              </button>
               <button class="mini-button" type="button" data-action="add-department">追加</button>
             </div>
-            <div class="list-editor" id="departmentRows">
+            <div class="list-editor is-collapsed" id="departmentRows">
               ${app.state.departments.map((department) => renderDepartmentRow(department)).join("")}
             </div>
           </section>
-          <section class="settings-block">
+          <section class="settings-block settings-collapsible">
             <div class="section-head">
-              <h2 class="section-title">プロジェクト</h2>
+              <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="policyTypeRows" aria-expanded="false">
+                <span class="collapse-mark">＋</span>
+                <span class="section-title">方針・施策の種別</span>
+                <span class="section-count">${getPolicyTypes().length}件</span>
+              </button>
+              <button class="mini-button" type="button" data-action="add-policy-type">追加</button>
+            </div>
+            <div class="list-editor is-collapsed" id="policyTypeRows">
+              ${getPolicyTypes().map((type) => renderPolicyTypeRow(type)).join("")}
+            </div>
+          </section>
+          <section class="settings-block settings-collapsible">
+            <div class="section-head">
+              <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="projectRows" aria-expanded="false">
+                <span class="collapse-mark">＋</span>
+                <span class="section-title">プロジェクト</span>
+                <span class="section-count">${app.state.projects.length}件</span>
+              </button>
               <button class="mini-button" type="button" data-action="add-project">追加</button>
             </div>
-            <div class="list-editor" id="projectRows">
+            <div class="list-editor is-collapsed" id="projectRows">
               ${app.state.projects.map((project) => renderProjectRow(project)).join("")}
             </div>
           </section>
@@ -2490,6 +2686,20 @@
     `;
   }
 
+  function renderPolicyTypeRow(type) {
+    const id = uid("policy-type");
+    return `
+      <div class="list-row" data-row="policyType" data-id="${escapeAttr(id)}">
+        <input name="policyTypeName" value="${escapeAttr(type)}" aria-label="方針・施策の種別">
+        <div class="list-row-order" aria-label="種別の並び替え">
+          <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="up" aria-label="上へ">↑</button>
+          <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="down" aria-label="下へ">↓</button>
+        </div>
+        <button class="mini-button" type="button" data-action="remove-settings-row">削除</button>
+      </div>
+    `;
+  }
+
   function renderProjectRow(project) {
     return `
       <div class="list-row" data-row="project" data-id="${escapeAttr(project.id)}">
@@ -2501,11 +2711,37 @@
 
   function addSettingsRow(type) {
     if (type === "department") {
-      document.getElementById("departmentRows")?.insertAdjacentHTML("beforeend", renderDepartmentRow({ id: uid("dept"), name: "新しい分類" }));
+      const target = document.getElementById("departmentRows");
+      target?.insertAdjacentHTML("beforeend", renderDepartmentRow({ id: uid("dept"), name: "新しい分類" }));
+      setSettingsPanelOpen("departmentRows", true);
+    }
+    if (type === "policyType") {
+      const target = document.getElementById("policyTypeRows");
+      target?.insertAdjacentHTML("beforeend", renderPolicyTypeRow("新しい種別"));
+      setSettingsPanelOpen("policyTypeRows", true);
     }
     if (type === "project") {
-      document.getElementById("projectRows")?.insertAdjacentHTML("beforeend", renderProjectRow({ id: uid("project"), name: "新しいプロジェクト" }));
+      const target = document.getElementById("projectRows");
+      target?.insertAdjacentHTML("beforeend", renderProjectRow({ id: uid("project"), name: "新しいプロジェクト" }));
+      setSettingsPanelOpen("projectRows", true);
     }
+  }
+
+  function toggleSettingsPanel(button) {
+    const targetId = button.dataset.target || "";
+    const target = document.getElementById(targetId);
+    setSettingsPanelOpen(targetId, target?.classList.contains("is-collapsed"));
+  }
+
+  function setSettingsPanelOpen(targetId, open) {
+    const target = document.getElementById(targetId);
+    const button = [...document.querySelectorAll('[data-action="toggle-settings-panel"]')]
+      .find((item) => item.dataset.target === targetId);
+    if (!target || !button) return;
+    target.classList.toggle("is-collapsed", !open);
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    const mark = button.querySelector(".collapse-mark");
+    if (mark) mark.textContent = open ? "－" : "＋";
   }
 
   async function handleSettingsSubmit(form) {
@@ -2521,6 +2757,9 @@
       createdAt: findById(app.state.departments, row.dataset.id)?.createdAt || now,
       updatedAt: now
     }));
+    app.state.settings.policyTypes = normalizePolicyTypes([...form.querySelectorAll('[data-row="policyType"] input')]
+      .map((input) => input.value.trim())
+      .filter(Boolean));
     app.state.projects = [...form.querySelectorAll('[data-row="project"]')].map((row) => ({
       id: row.dataset.id || uid("project"),
       name: row.querySelector("input")?.value.trim() || "未名称",
@@ -2740,6 +2979,7 @@
       app.state.settings = {
         ...app.state.settings,
         ...payload.settings,
+        policyTypes: normalizePolicyTypes(payload.settings.policyTypes || app.state.settings.policyTypes),
         appliedTaskImportId: importId
       };
     }
@@ -3065,6 +3305,115 @@
     ).join("");
   }
 
+  function renderPolicyTypeOptions(current) {
+    return getPolicyTypes(current).map((type) =>
+      `<option value="${escapeAttr(type)}"${selected(current, type)}>${escapeHtml(type)}</option>`
+    ).join("");
+  }
+
+  function renderPolicyPeriodField(start = "", end = "") {
+    const month = monthKey(dateObject(start || end || todayIso()));
+    return `
+      <div class="field policy-period-field" data-period-picker data-range-month="${escapeAttr(month)}">
+        <label for="policyPeriodText">期間</label>
+        <input id="policyPeriodText" class="period-display-input" type="text" readonly value="${escapeAttr(formatPolicyPeriodRange(start, end))}" placeholder="期間なし">
+        <input id="periodStart" name="periodStart" type="hidden" value="${escapeAttr(start)}">
+        <input id="periodEnd" name="periodEnd" type="hidden" value="${escapeAttr(end)}">
+        <div class="period-picker" data-period-calendar>
+          ${renderPolicyPeriodCalendar(month, start, end)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPolicyPeriodCalendar(month, start = "", end = "") {
+    const current = parseMonthKey(month || monthKey(new Date()));
+    const days = buildCalendarDays(current.year, current.month);
+    return `
+      <div class="period-picker-head">
+        <button class="mini-button" type="button" data-action="period-month-prev">前月</button>
+        <strong>${current.year}年${current.month + 1}月</strong>
+        <button class="mini-button" type="button" data-action="period-month-next">翌月</button>
+      </div>
+      <div class="period-picker-grid">
+        ${["月", "火", "水", "木", "金", "土", "日"].map((day) => `<span>${day}</span>`).join("")}
+        ${days.map((day) => {
+          const iso = toDateInputValue(day.date);
+          const inRange = start && end && iso >= start && iso <= end;
+          const classes = [
+            "period-date-button",
+            day.inMonth ? "" : "is-muted",
+            iso === start ? "is-start" : "",
+            iso === end ? "is-end" : "",
+            inRange ? "is-in-range" : "",
+            iso === todayIso() ? "is-today" : ""
+          ].filter(Boolean).join(" ");
+          return `<button class="${classes}" type="button" data-action="select-period-date" data-date="${iso}">${day.date.getDate()}</button>`;
+        }).join("")}
+      </div>
+      <div class="period-picker-actions">
+        <span>${escapeHtml(formatPolicyPeriodRange(start, end) || "開始日を選んでください")}</span>
+        <button class="mini-button" type="button" data-action="clear-policy-period">クリア</button>
+      </div>
+    `;
+  }
+
+  function changePolicyPeriodMonth(button, delta) {
+    const picker = button.closest("[data-period-picker]");
+    if (!picker) return;
+    const current = parseMonthKey(picker.dataset.rangeMonth || monthKey(new Date()));
+    const date = new Date(current.year, current.month + delta, 1);
+    picker.dataset.rangeMonth = monthKey(date);
+    refreshPolicyPeriodPicker(picker);
+  }
+
+  function selectPolicyPeriodDate(button) {
+    const picker = button.closest("[data-period-picker]");
+    if (!picker) return;
+    const date = button.dataset.date || "";
+    const startInput = picker.querySelector('input[name="periodStart"]');
+    const endInput = picker.querySelector('input[name="periodEnd"]');
+    const start = startInput?.value || "";
+    const end = endInput?.value || "";
+    if (!start || end) {
+      if (startInput) startInput.value = date;
+      if (endInput) endInput.value = "";
+    } else if (date < start) {
+      if (startInput) startInput.value = date;
+      if (endInput) endInput.value = start;
+    } else {
+      if (endInput) endInput.value = date;
+    }
+    picker.dataset.rangeMonth = monthKey(dateObject(date));
+    refreshPolicyPeriodPicker(picker);
+  }
+
+  function clearPolicyPeriod(button) {
+    const picker = button.closest("[data-period-picker]");
+    if (!picker) return;
+    const startInput = picker.querySelector('input[name="periodStart"]');
+    const endInput = picker.querySelector('input[name="periodEnd"]');
+    if (startInput) startInput.value = "";
+    if (endInput) endInput.value = "";
+    refreshPolicyPeriodPicker(picker);
+  }
+
+  function refreshPolicyPeriodPicker(picker) {
+    const start = picker.querySelector('input[name="periodStart"]')?.value || "";
+    const end = picker.querySelector('input[name="periodEnd"]')?.value || "";
+    const display = picker.querySelector("#policyPeriodText");
+    const calendar = picker.querySelector("[data-period-calendar]");
+    if (display) display.value = formatPolicyPeriodRange(start, end);
+    if (calendar) calendar.innerHTML = renderPolicyPeriodCalendar(picker.dataset.rangeMonth, start, end);
+  }
+
+  function formatPolicyPeriodRange(start = "", end = "") {
+    if (start && end) return `${formatShortDate(start)} - ${formatShortDate(end)}`;
+    if (start) return `${formatShortDate(start)} -`;
+    if (end) return `- ${formatShortDate(end)}`;
+    return "";
+  }
+
   function renderDepartmentOptions(current) {
     return `<option value="">未設定</option>${app.state.departments.map((department) =>
       `<option value="${escapeAttr(department.id)}"${selected(current, department.id)}>${escapeHtml(department.name)}</option>`
@@ -3180,14 +3529,10 @@
 
   function taskOccursOnDate(task, date) {
     if (task.actionDate === date) return true;
-    if (!hasRecurrence(task)) return false;
-    return recurrenceMatchesDate(task, date);
+    return false;
   }
 
   function isTaskCompletedForDate(task, date = "") {
-    if (hasRecurrence(task) && date && taskOccursOnDate(task, date)) {
-      return (task.completedDates || []).includes(date);
-    }
     if (task.status !== "completed") return false;
     if (!date) return true;
     return task.completedAt?.startsWith(date) || task.actionDate === date;
@@ -3222,6 +3567,19 @@
       return target.getDay() === recurrence.weekday && nthWeekdayOfMonth(target) === recurrence.ordinal;
     }
     return false;
+  }
+
+  function getNextRecurrenceDate(task, fromDate) {
+    if (!hasRecurrence(task) || !isIsoDate(fromDate)) return "";
+    const recurrence = normalizeRecurrence(task.recurrence);
+    if (recurrence.type === "custom") {
+      return recurrence.customDates.find((date) => date > fromDate) || "";
+    }
+    for (let offset = 1; offset <= 370; offset += 1) {
+      const candidate = addDays(fromDate, offset);
+      if (recurrenceMatchesDate(task, candidate)) return candidate;
+    }
+    return "";
   }
 
   function recurrenceLabel(task) {
