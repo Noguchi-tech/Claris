@@ -328,6 +328,11 @@
     return text || "方針";
   }
 
+  function normalizeTaskPriority(priority) {
+    const value = String(priority || "").trim();
+    return priorityMeta[value] ? value : "SUB";
+  }
+
   function normalizeDeletedItem(item) {
     return {
       id: item.id || uid("deleted"),
@@ -844,7 +849,7 @@
   }
 
   function renderTaskCard(task, contextDate = "") {
-    const priority = priorityMeta[task.priority] || priorityMeta.NONE;
+    const priority = priorityMeta[task.priority] || priorityMeta.SUB;
     const department = findById(app.state.departments, task.departmentId);
     const project = findById(app.state.projects, task.projectId);
     const linkedMemos = getLinkedMemos(task);
@@ -897,10 +902,9 @@
       <article class="memo-card" data-card-action="edit-memo" data-id="${escapeAttr(memo.id)}" tabindex="0">
         <div class="section-head">
           <h3><button class="title-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">${escapeHtml(memo.title || "メモ")}</button></h3>
-          <span class="priority-pill ${(priorityMeta[memo.priority] || priorityMeta.NONE).className}">${(priorityMeta[memo.priority] || priorityMeta.NONE).label}</span>
+          <span class="priority-pill ${(priorityMeta[memo.priority] || priorityMeta.SUB).className}">${(priorityMeta[memo.priority] || priorityMeta.SUB).label}</span>
         </div>
         <div class="meta-row">
-          ${memo.dueDate ? `<span class="tag">DL ${formatShortDate(memo.dueDate)}</span>` : ""}
           ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
           ${project ? `<span class="tag">${escapeHtml(project.name)}</span>` : ""}
           ${linkedTasks.length ? `<span class="tag">関連タスク ${linkedTasks.length}</span>` : ""}
@@ -952,7 +956,12 @@
   async function handleClick(event) {
     const tabButton = event.target.closest("[data-tab]");
     if (tabButton) {
-      app.state.ui.activeTab = normalizeActiveTab(tabButton.dataset.tab);
+      const nextTab = normalizeActiveTab(tabButton.dataset.tab);
+      if (nextTab === normalizeActiveTab(app.state.ui.activeTab)) {
+        scrollCurrentViewToTop();
+        return;
+      }
+      app.state.ui.activeTab = nextTab;
       await saveState();
       render();
       return;
@@ -1011,6 +1020,13 @@
     if (action === "add-project") addSettingsRow("project");
     if (action === "move-settings-row") moveSettingsRow(button);
     if (action === "remove-settings-row") button.closest(".list-row")?.remove();
+  }
+
+  function scrollCurrentViewToTop() {
+    const shell = document.querySelector(".app-shell");
+    if (shell?.scrollIntoView) shell.scrollIntoView({ block: "start", behavior: "smooth" });
+    window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+    view?.focus?.({ preventScroll: true });
   }
 
   function handleKeydown(event) {
@@ -1088,15 +1104,29 @@
       filterTaskPicker(event.target);
     }
     if (event.target.id === "entrySearch") {
-      const cursor = event.target.selectionStart || 0;
-      app.state.ui.entrySearch = event.target.value;
-      saveState();
-      renderEntriesView();
-      const search = document.getElementById("entrySearch");
-      if (search) {
-        search.focus();
-        search.setSelectionRange(cursor, cursor);
-      }
+      if (app.isComposingText || event.isComposing) return;
+      handleEntrySearchInput(event.target);
+    }
+  }
+
+  function handleCompositionStart(event) {
+    if (event.target.matches("input, textarea")) app.isComposingText = true;
+  }
+
+  function handleCompositionEnd(event) {
+    app.isComposingText = false;
+    if (event.target.id === "entrySearch") handleEntrySearchInput(event.target);
+  }
+
+  function handleEntrySearchInput(input) {
+    const cursor = input.selectionStart || 0;
+    app.state.ui.entrySearch = input.value;
+    saveState();
+    renderEntriesView();
+    const search = document.getElementById("entrySearch");
+    if (search) {
+      search.focus();
+      search.setSelectionRange(cursor, cursor);
     }
   }
 
@@ -1132,14 +1162,14 @@
     const conflictTarget = button.closest("#conflictMoveAvailability");
     if (conflictTarget) {
       const input = document.getElementById("conflictMovePriority");
-      if (input) input.value = input.value === priority ? "NONE" : priority;
+      if (input) input.value = input.value === priority ? "SUB" : priority;
       updateConflictMovePreview();
       return;
     }
     const form = button.closest("form");
     const input = form?.elements.priority;
     if (!input) return;
-    input.value = input.value === priority ? "NONE" : priority;
+    input.value = input.value === priority ? "SUB" : priority;
     updateTaskPriorityPreview(form);
   }
 
@@ -1212,7 +1242,7 @@
   function defaultTaskForCurrentContext() {
     if (app.state.ui.activeTab === "today") return { actionDate: todayIso(), priority: "P2" };
     if (app.state.ui.activeTab === "calendar") return { actionDate: app.state.ui.selectedDate || todayIso(), priority: "P2" };
-    return { priority: "NONE" };
+    return { priority: "SUB" };
   }
 
   function openTaskForm(task = null, defaults = {}) {
@@ -1224,7 +1254,7 @@
       assignee: existing?.assignee || "",
       actionDate: existing?.actionDate || defaults.actionDate || "",
       dueDate: existing?.dueDate || "",
-      priority: existing?.priority || defaults.priority || "NONE",
+      priority: normalizeTaskPriority(existing?.priority || defaults.priority || "SUB"),
       departmentId: existing?.departmentId || "",
       projectId: existing?.projectId || "",
       estimatedMinutes: existing?.estimatedMinutes || "",
@@ -1359,12 +1389,8 @@
           ` : ""}
           <div class="field-inline">
             <div class="field">
-              <label for="memoDueDate">DL</label>
-              <input id="memoDueDate" name="dueDate" type="date" value="${escapeAttr(existing?.dueDate || "")}">
-            </div>
-            <div class="field">
               <label for="memoPriority">優先度</label>
-              <select id="memoPriority" name="priority">${renderPriorityOptions(existing?.priority || "NONE")}</select>
+              <select id="memoPriority" name="priority">${renderPriorityOptions(existing?.priority || "SUB")}</select>
             </div>
             <div class="field">
               <label for="memoDepartment">${CLASSIFICATION_LABEL}</label>
@@ -1568,14 +1594,14 @@
     const target = form.querySelector("#priorityAvailability");
     if (!target) return;
     const date = String(form.elements.actionDate?.value || "");
-    if (!date && form.elements.priority) form.elements.priority.value = "NONE";
-    const selectedPriority = String(form.elements.priority?.value || "");
+    if (!date && form.elements.priority) form.elements.priority.value = "SUB";
+    const selectedPriority = normalizeTaskPriority(form.elements.priority?.value || "SUB");
     const currentId = form.dataset.id || "";
     target.innerHTML = renderPrioritySelector(date, currentId, selectedPriority);
   }
 
   function renderPrioritySelector(date, excludeId = "", selectedPriority = "", extraExcludeIds = []) {
-    const selected = priorityMeta[selectedPriority] ? selectedPriority : "NONE";
+    const selected = normalizeTaskPriority(selectedPriority);
     if (!date) {
       return `
         <div class="availability-row availability-row-empty">
@@ -1595,7 +1621,7 @@
     }).join("");
     return `
       <div class="availability-row">${rows}</div>
-      <p class="availability-note">未選択: 未設定</p>
+      <p class="availability-note">未選択時はサブタスクに入ります。</p>
     `;
   }
 
@@ -1603,8 +1629,7 @@
     const classes = [
       "availability-pill",
       occupied ? "is-occupied" : "is-open",
-      selectedPriority ? "is-selected" : "",
-      priority === "NONE" ? "is-none" : ""
+      selectedPriority ? "is-selected" : ""
     ].filter(Boolean).join(" ");
     return `
       <button class="${classes}" type="button" data-action="select-priority-slot" data-priority="${priority}" aria-pressed="${selectedPriority ? "true" : "false"}">
@@ -1627,7 +1652,7 @@
       assignee: String(data.get("assignee") || "").trim(),
       actionDate: String(data.get("actionDate") || ""),
       dueDate: String(data.get("dueDate") || ""),
-      priority: String(data.get("priority") || "NONE"),
+      priority: normalizeTaskPriority(data.get("priority")),
       departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
       projectId: String(data.get("projectId") || ""),
       estimatedMinutes: Number(data.get("estimatedMinutes") || 0),
@@ -1727,7 +1752,7 @@
     const conflicts = findPriorityConflicts(task);
     if (mode === "move-existing") {
       const moveDate = document.getElementById("conflictMoveDate")?.value || "";
-      const movePriority = document.getElementById("conflictMovePriority")?.value || "NONE";
+      const movePriority = normalizeTaskPriority(document.getElementById("conflictMovePriority")?.value);
       if (!moveDate || !priorityMeta[movePriority]) {
         showToast("既存タスクの移動日を選んでください。");
         return;
@@ -1763,7 +1788,7 @@
   }
 
   function formatConflictSlot(task) {
-    const priority = priorityMeta[task.priority]?.label || "未設定";
+    const priority = (priorityMeta[task.priority] || priorityMeta.SUB).label;
     const date = task.actionDate ? formatShortDate(task.actionDate) : "実施日なし";
     return `${date} / ${priority}`;
   }
@@ -1828,8 +1853,8 @@
       decisions: String(data.get("decisions") || "").trim(),
       nextActions: String(data.get("nextActions") || "").trim(),
       transcript,
-      dueDate: String(data.get("dueDate") || ""),
-      priority: String(data.get("priority") || "NONE"),
+      dueDate: "",
+      priority: normalizeTaskPriority(data.get("priority")),
       departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
       projectId: String(data.get("projectId") || ""),
       taskIds: data.getAll("taskIds").map(String),
@@ -2077,7 +2102,6 @@
     if (!memo) return;
     openTaskForm(null, {
       title: memo.nextActions || memo.title,
-      dueDate: memo.dueDate,
       priority: memo.priority,
       departmentId: memo.departmentId,
       projectId: memo.projectId,
@@ -2086,8 +2110,7 @@
     const form = document.getElementById("taskForm");
     if (!form) return;
     form.elements.title.value = memo.nextActions || memo.title || "メモから作成";
-    form.elements.dueDate.value = memo.dueDate || "";
-    form.elements.priority.value = memo.priority || "NONE";
+    form.elements.priority.value = normalizeTaskPriority(memo.priority);
     form.elements.departmentId.value = memo.departmentId || "";
     form.elements.projectId.value = memo.projectId || "";
     [...form.elements.memoIds.options].forEach((option) => {
@@ -2766,7 +2789,7 @@
         decisions: memo.decisions || memo.決定 || "",
         nextActions: memo.nextActions || memo.次 || "",
         transcript: memo.transcript || memo.文字起こし || "",
-        dueDate: toDateInputValueFromUnknown(memo.dueDate || memo.DL || memo.期限),
+        dueDate: "",
         priority: normalizePriority(memo.priority || memo.優先度),
         departmentId: matchDepartmentId(memo.department || memo.departmentName || memo.category || memo.categoryName || memo.分類 || memo.部門),
         projectId: matchProjectId(memo.project || memo.projectName || memo.プロジェクト)
@@ -3292,11 +3315,11 @@
     if (!filter || filter === "all") return true;
     if (filter === "today") {
       if (kind === "task") return item.actionDate === todayIso() || item.dueDate === todayIso();
-      if (kind === "memo") return item.dueDate === todayIso();
+      if (kind === "memo") return false;
       if (kind === "policy") return isDateInPolicy(todayIso(), item);
     }
     if (filter === "no-date") return kind === "task" ? !item.actionDate : true;
-    if (filter === "due") return kind === "task" || kind === "memo" ? Boolean(item.dueDate) : false;
+    if (filter === "due") return kind === "task" ? Boolean(item.dueDate) : false;
     if (filter === "no-dept") return !item.departmentId;
     if (filter.startsWith("dept:")) return item.departmentId === filter.slice(5);
     if (filter.startsWith("project:")) return kind !== "policy" && item.projectId === filter.slice(8);
@@ -3607,7 +3630,7 @@
     if (/2次|二次|P2/i.test(text)) return "P2";
     if (/3次|三次|P3/i.test(text)) return "P3";
     if (/サブ|SUB/i.test(text)) return "SUB";
-    return "NONE";
+    return "SUB";
   }
 
   function normalizeSearchText(value) {
