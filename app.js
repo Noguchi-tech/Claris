@@ -566,9 +566,9 @@
     view.innerHTML = `
       <section class="calendar-shell">
         <div class="calendar-header">
-          <button class="mini-button month-nav-button" type="button" data-action="month-prev" aria-label="月を戻す">&lt;</button>
+          <button class="mini-button month-nav-button" type="button" data-action="month-prev" aria-label="月を戻す"><span class="month-nav-chevron is-prev" aria-hidden="true"></span></button>
           <h2 class="section-title">${current.year}年${current.month + 1}月</h2>
-          <button class="mini-button month-nav-button" type="button" data-action="month-next" aria-label="月を進める">&gt;</button>
+          <button class="mini-button month-nav-button" type="button" data-action="month-next" aria-label="月を進める"><span class="month-nav-chevron is-next" aria-hidden="true"></span></button>
         </div>
         ${renderCalendarPeriodSummary(selectedDate)}
         <div class="calendar-grid" aria-label="カレンダー">
@@ -3414,11 +3414,11 @@
     const afterDates = selectedDates.filter((date) => date > monthEnd).map(formatShortDate);
     return `
       <div class="period-picker-head">
-        <button class="mini-button month-nav-button" type="button" data-action="period-month-prev" aria-label="月を戻す">&lt;</button>
+        <button class="mini-button month-nav-button" type="button" data-action="period-month-prev" aria-label="月を戻す"><span class="month-nav-chevron is-prev" aria-hidden="true"></span></button>
         <span class="period-outside-date">${escapeHtml(beforeDates.join(" / "))}</span>
         <strong>${current.year}年${current.month + 1}月</strong>
         <span class="period-outside-date">${escapeHtml(afterDates.join(" / "))}</span>
-        <button class="mini-button month-nav-button" type="button" data-action="period-month-next" aria-label="月を進める">&gt;</button>
+        <button class="mini-button month-nav-button" type="button" data-action="period-month-next" aria-label="月を進める"><span class="month-nav-chevron is-next" aria-hidden="true"></span></button>
       </div>
       <div class="period-picker-grid">
         ${["月", "火", "水", "木", "金", "土", "日"].map((day) => `<span>${day}</span>`).join("")}

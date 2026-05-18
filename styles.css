@@ -455,9 +455,28 @@ input[type="checkbox"] {
 .month-nav-button {
   width: 38px;
   min-width: 38px;
+  display: inline-grid;
+  place-items: center;
   padding: 0;
-  font-size: 18px;
-  font-weight: 900;
+}
+
+.month-nav-chevron {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  box-sizing: border-box;
+}
+
+.month-nav-chevron.is-prev {
+  transform: rotate(135deg);
+  margin-left: 4px;
+}
+
+.month-nav-chevron.is-next {
+  transform: rotate(-45deg);
+  margin-right: 4px;
 }
 
 .mini-button.is-active {
