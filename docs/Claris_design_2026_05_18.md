@@ -26,6 +26,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主
 - インジケーターは実ボタン幅から内側余白を引いた幅で表示する。
 - 今日タブだけを外へ膨らませず、同じ高さの中でアイコンと背景で強調する。
 - `overflow: hidden` によりリキッドグラス風の擬似要素がタブ外へはみ出さないようにする。
+- ナビは画面下端へ接地させ、safe area を自身の padding として持つ。下端の空白から背面カードへタップが抜ける状態を作らない。
 
 ## 4. 今日画面設計
 
@@ -41,6 +42,8 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主
 
 - 種別略称は `compactPeriodType()` で作る。
 - 同種別が複数ある場合は `半2` のように件数を付ける。
+- カレンダー上部サマリは全件を折り返し表示し、件数が多いときは `compactPeriodSummary()` でタイトルと本文を短くする。
+- DL 日は濃い背景で表示し、2型3色覚モードでは斜線パターンで意味を補強する。
 - 選択日の詳細では従来通りカード単位で編集できる。
 
 ## 6. フォーム設計
@@ -62,7 +65,13 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主
 
 運営情報フォームの種別 select には `＋ 新しい種別を追加` を置き、選択時に prompt で追加する。
 
-## 8. メモ・文字起こし設計
+## 8. 検索・アクセシビリティ設計
+
+検索キーは `normalizeSearchText()` で NFKC 正規化、カタカナのひらがな化、ローマ字化、主要な業務語の別表記追加を行う。汎用の漢字読み変換ライブラリは増やさず、Claris 内で使う分類名、優先度、DL、運営情報、メモ項目を辞書化する。
+
+色覚補正は `settings.colorVisionMode` で保持し、`data-color-vision="deutan"` の CSS 変数で配色を切り替える。DL と P1 は色だけでなくパターンも加える。
+
+## 9. メモ・文字起こし設計
 
 録音中の文字起こしは `pendingRecordingTranscript`、録音中ドラフト、非表示 input の3経路で保持する。
 
@@ -70,7 +79,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主
 - 保存時は `appendUniqueText()` で重複を避けて本文と文字起こし欄へ反映する。
 - 文字起こし API が使えない場合でも録音ファイルは保存待ちにできる。
 
-## 9. LLM 連携設計
+## 10. LLM 連携設計
 
 メモの自動判定は `classifyMemoForm()` から実行する。
 
@@ -78,7 +87,8 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主
 - `settings.llmEndpoint` が設定されていれば POST する。
 - 戻り値は `title`、`agenda`、`decisions`、`nextActions` または `論点`、`方針`、`行動` を受け付ける。
 - 通信失敗時は `organizeText()` のローカル判定へフォールバックする。
+- 設定画面では `integration-flow` でメモ、LLM、整理の流れを図示し、データ連携でも端末、JSON、反映の流れを同じ部品で示す。
 
-## 10. 配置設計
+## 11. 配置設計
 
 要件定義書、設計書、仕様書は `Claris_app/docs/` に置く。`Claris_app` は Git リポジトリのため、GitHub へ push すれば Windows 側で pull できる。

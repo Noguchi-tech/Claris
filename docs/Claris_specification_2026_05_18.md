@@ -18,6 +18,7 @@
 - `updateNavIndicator()` は対象ボタンの実測位置から `--nav-indicator-x` と `--nav-indicator-width` を更新する。
 - インジケーターはナビの内側に 3px 余白を取り、外へはみ出さない。
 - 今日タブの高さは他タブと同じ 56px とし、背景とアイコンで強調する。
+- `.bottom-nav` は `bottom: 0` で画面下端まで覆い、safe area を padding に含める。
 
 ## 3. 今日タブ仕様
 
@@ -54,7 +55,7 @@
 
 - タスクフォームの関連メモ欄は `renderMemoPicker()` で描画する。
 - 検索入力 `data-memo-search` はタイトル、本文、文字起こし、論点、方針、行動を対象にする。
-- `filterMemoPicker()` は `normalizeSearchText()` でひらがな・カタカナ差を吸収する。
+- `filterMemoPicker()` は `normalizeSearchText()` でひらがな・カタカナ差、ローマ字、主要な業務語の漢字読みを吸収する。
 - 保存時は `FormData.getAll("memoIds")` を `task.memoIds` に反映し、`syncMemoLinksForTask()` でメモ側と同期する。
 
 ## 6. メモ仕様
@@ -89,6 +90,9 @@
 - グループ単位は正規化済みの `policy.type`。
 - 1件なら `半`、2件以上なら `半2` のように表示する。
 - DL は従来通り `DL` または `DL2` として表示する。
+- `renderCalendarPeriodSummary()` は選択日に有効な運営情報を `slice()` で制限せず全件描画する。
+- 件数が多い場合は `compactPeriodSummary()` の文字数上限を短くし、CSS の2行クランプで窓内に収める。
+- DL 日は通常日より濃い `--due-surface` で塗り、2型3色覚モードでは斜線パターンも加える。
 
 ## 9. 期間仕様
 
@@ -103,6 +107,8 @@
 - 分類と運営情報の種別は `.list-row` で表示する。
 - 並び替えは `data-drag-handle` から開始する Pointer Events ドラッグで行う。
 - `handleSettingsSubmit()` は DOM 順で分類の `sortOrder` と `settings.policyTypes` を保存する。
+- `settings.colorVisionMode` は `standard` または `deutan` とし、`documentElement.dataset.colorVision` に反映する。
+- 設定画面のデータ連携と外部 LLM 連携には `.integration-flow` の図示を出す。
 
 ## 11. LLM 自動判定仕様
 

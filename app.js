@@ -13,6 +13,40 @@
   const ADD_DEPARTMENT_VALUE = "__add_department__";
   const ADD_POLICY_TYPE_VALUE = "__add_policy_type__";
   const defaultPolicyTypes = ["方針", "月次", "週次", "半期", "分類", "施策", "イベント", "応援", "在庫", "売場", "商売計画"];
+  const colorVisionModes = new Set(["standard", "deutan"]);
+  const searchAliasGroups = [
+    ["Claris", "クラリス", "くらりす"],
+    ["タスク", "たすく", "task", "todo", "to do", "作業", "さぎょう", "実施", "じっし"],
+    ["メモ", "めも", "memo", "note", "記録", "きろく", "議事", "ぎじ"],
+    [OPERATIONS_LABEL, "運営", "うんえい", "unei", "情報", "じょうほう", "info"],
+    ["方針", "ほうしん", "houshin", "policy"],
+    ["施策", "しさく", "shisaku", "initiative"],
+    ["半期", "はんき", "hanki", "half"],
+    ["月次", "げつじ", "getsuji", "monthly"],
+    ["週次", "しゅうじ", "shuji", "weekly"],
+    ["分類", "ぶんるい", "bunrui", "category", "dept", "department"],
+    ["担当", "たんとう", "tanto", "assignee", "owner"],
+    ["優先", "ゆうせん", "yusen", "priority"],
+    ["最優先", "さいゆうせん", "saiyusen", "p1"],
+    ["2次優先", "二次優先", "にじゆうせん", "nijiyusen", "p2"],
+    ["3次優先", "三次優先", "さんじゆうせん", "sanjiyusen", "p3"],
+    ["サブタスク", "さぶたすく", "subtask", "sub"],
+    ["DL", "deadline", "due", "締切", "しめきり", "納期", "のうき"],
+    ["論点", "ろんてん", "ronten", "agenda", "issue"],
+    ["行動", "こうどう", "kodo", "action", "next action"],
+    ["文字起こし", "もじおこし", "mojiokoshi", "transcript"],
+    ["録音", "ろくおん", "rokuon", "recording", "audio"],
+    ["データ", "でーた", "data", "同期", "どうき", "doki", "sync", "JSON", "インポート", "import", "エクスポート", "export"],
+    ["LLM", "ai", "外部連携", "がいぶれんけい", "gaiburenkei"],
+    ["庶務", "しょむ", "shomu"],
+    ["食品", "しょくひん", "shokuhin", "food"],
+    ["衣服", "いふく", "ifuku", "clothing"],
+    ["H&B", "hb", "エイチアンドビー", "へるす", "びゅーてぃ", "health", "beauty"],
+    ["ハウス", "はうす", "house"],
+    ["ステー", "すてー", "stationery", "stationary", "文具", "ぶんぐ", "bungu"],
+    ["大型", "おおがた", "oogata", "large"],
+    ["その他", "そのた", "sonota", "other"]
+  ];
   const memoFieldLabels = {
     agenda: "論点",
     decisions: "方針",
@@ -113,6 +147,7 @@
     app.state = await loadState();
     await applyBundledTaskImport();
     applyStartupUiPolicy();
+    applyAccessibilitySettings();
     render();
     registerServiceWorker();
   }
@@ -193,6 +228,7 @@
         showCompleted: true,
         showLinkedMemos: true,
         policyTypes: [...defaultPolicyTypes],
+        colorVisionMode: "standard",
         llmProvider: "",
         llmEndpoint: "",
         appliedTaskImportId: ""
@@ -240,6 +276,7 @@
     merged.memos = merged.memos.map(normalizeMemo);
     merged.policies = merged.policies.map(normalizePolicy);
     merged.settings.policyTypes = normalizePolicyTypes(merged.settings.policyTypes);
+    merged.settings.colorVisionMode = normalizeColorVisionMode(merged.settings.colorVisionMode);
     merged.deletedItems = merged.deletedItems.map(normalizeDeletedItem);
     return merged;
   }
@@ -363,6 +400,11 @@
     return [...new Set(values)].length ? [...new Set(values)] : [...defaultPolicyTypes];
   }
 
+  function normalizeColorVisionMode(value) {
+    const mode = String(value || "standard").trim();
+    return colorVisionModes.has(mode) ? mode : "standard";
+  }
+
   function getPolicyTypes(current = "") {
     const types = normalizePolicyTypes(app.state?.settings?.policyTypes);
     const normalizedCurrent = normalizePolicyType(current || "");
@@ -396,6 +438,7 @@
   function render() {
     const activeTab = normalizeActiveTab(app.state.ui.activeTab || "today");
     app.state.ui.activeTab = activeTab;
+    applyAccessibilitySettings();
     viewTitle.textContent = tabs[activeTab] || "今日";
     if (appName) appName.textContent = "Claris / クラリス";
     if (headerDate) headerDate.textContent = formatHeaderDate(todayIso());
@@ -437,6 +480,10 @@
   function normalizeActiveTab(tab) {
     if (legacyEntryTabs.has(tab)) return "entries";
     return tabs[tab] ? tab : "today";
+  }
+
+  function applyAccessibilitySettings() {
+    document.documentElement.dataset.colorVision = normalizeColorVisionMode(app.state?.settings?.colorVisionMode);
   }
 
   function buildHeaderAssigneeLabel() {
@@ -575,7 +622,7 @@
         `).join("")}
       </section>
       <section class="toolbar entry-filter-bar">
-        <input id="entrySearch" type="search" value="${escapeAttr(query)}" placeholder="検索" autocomplete="off">
+        <input id="entrySearch" type="search" value="${escapeAttr(query)}" placeholder="検索（漢字・かな・英字）" autocomplete="off">
         <select id="entryFilter" aria-label="一覧フィルター">
           ${renderEntryFilterOptions(filter)}
         </select>
@@ -769,7 +816,7 @@
   }
 
   function renderCalendarPeriodSummary(date) {
-    const periods = getCalendarPeriodsForDate(date, "all").slice(0, 4);
+    const periods = getCalendarPeriodsForDate(date, "all");
     return `
       <section class="calendar-period-summary" aria-label="選択日の${OPERATIONS_LABEL}">
         <span class="period-summary-label">${OPERATIONS_LABEL}</span>
@@ -780,7 +827,7 @@
               `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
             ].join(" ");
             const action = "edit-policy";
-            const summary = compactPeriodSummary(period);
+            const summary = compactPeriodSummary(period, periods.length);
             return `
               <button class="${classes}" type="button" data-action="${action}" data-id="${escapeAttr(period.id)}" title="${escapeAttr(`${period.type || "方針"}: ${summary}`)}">
                 <strong>${escapeHtml(period.type || "方針")}</strong>
@@ -793,9 +840,11 @@
     `;
   }
 
-  function compactPeriodSummary(period) {
-    const title = truncate(period.title || period.type || "方針", 16);
-    const detail = truncate(period.summary || "", 28);
+  function compactPeriodSummary(period, totalCount = 1) {
+    const titleLimit = totalCount > 4 ? 10 : 16;
+    const detailLimit = totalCount > 4 ? 18 : 28;
+    const title = truncate(period.title || period.type || "方針", titleLimit);
+    const detail = truncate(period.summary || "", detailLimit);
     if (!detail || detail === title) return title;
     return `${title}: ${detail}`;
   }
@@ -2829,6 +2878,31 @@
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
+  function renderIntegrationFlow(kind) {
+    const steps = kind === "llm"
+      ? [
+          ["memo", "メモ"],
+          ["llm", "LLM"],
+          ["claris", "整理"]
+        ]
+      : [
+          ["phone", "端末"],
+          ["json", "JSON"],
+          ["sync", "反映"]
+        ];
+    return `
+      <div class="integration-flow" aria-hidden="true">
+        ${steps.map(([icon, label], index) => `
+          ${index ? `<span class="integration-arrow"></span>` : ""}
+          <span class="integration-step integration-${icon}">
+            <span class="integration-icon"></span>
+            <span>${escapeHtml(label)}</span>
+          </span>
+        `).join("")}
+      </div>
+    `;
+  }
+
   async function changeMonth(delta) {
     const current = parseMonthKey(app.state.ui.calendarMonth || monthKey(new Date()));
     const next = new Date(current.year, current.month + delta, 1);
@@ -2853,6 +2927,19 @@
               <input name="showCompleted" type="checkbox" ${app.state.settings.showCompleted ? "checked" : ""}>
               完了済みを表示
             </label>
+          </section>
+          <section class="settings-block">
+            <h2 class="section-title">色覚補正</h2>
+            <div class="segmented-control" role="radiogroup" aria-label="色覚補正">
+              <label>
+                <input type="radio" name="colorVisionMode" value="standard" ${normalizeColorVisionMode(app.state.settings.colorVisionMode) === "standard" ? "checked" : ""}>
+                <span>標準</span>
+              </label>
+              <label>
+                <input type="radio" name="colorVisionMode" value="deutan" ${normalizeColorVisionMode(app.state.settings.colorVisionMode) === "deutan" ? "checked" : ""}>
+                <span>2型3色覚</span>
+              </label>
+            </div>
           </section>
           <section class="settings-block settings-collapsible">
             <div class="section-head">
@@ -2882,6 +2969,7 @@
           </section>
           <section class="settings-block">
             <h2 class="section-title">外部LLM連携準備</h2>
+            ${renderIntegrationFlow("llm")}
             <div class="field-inline">
               <div class="field">
                 <label for="settingsLlmProvider">連携名</label>
@@ -2901,6 +2989,7 @@
                 <button class="mini-button" type="button" data-action="export-master-json">マスター上書き用JSON</button>
               </div>
             </div>
+            ${renderIntegrationFlow("data")}
             <p class="body-preview">マスターJSONを選択または貼り付けると、この端末のローカルデータへ上書き反映できます。公開データファイル自体の更新は、ホスティング先へ配置し直します。</p>
             <div class="file-import-row">
               <label class="file-import-button" for="settingsImportFile">JSONファイルを選択</label>
@@ -3009,6 +3098,7 @@
     const now = nowIso();
     app.state.settings.showCompleted = data.get("showCompleted") === "on";
     app.state.settings.showLinkedMemos = true;
+    app.state.settings.colorVisionMode = normalizeColorVisionMode(data.get("colorVisionMode"));
     app.state.settings.llmProvider = String(data.get("llmProvider") || "").trim();
     app.state.settings.llmEndpoint = String(data.get("llmEndpoint") || "").trim();
     app.state.departments = [...form.querySelectorAll('[data-row="department"]')].map((row, index) => ({
@@ -3268,6 +3358,7 @@
         ...app.state.settings,
         ...payload.settings,
         policyTypes: normalizePolicyTypes(payload.settings.policyTypes || app.state.settings.policyTypes),
+        colorVisionMode: normalizeColorVisionMode(payload.settings.colorVisionMode || app.state.settings.colorVisionMode),
         appliedTaskImportId: importId
       };
     }
@@ -3761,7 +3852,7 @@
     if (!memos.length) return `<p class="body-preview">関連付けできるメモはまだありません。</p>`;
     return `
       <div class="memo-picker">
-        <input id="taskMemoSearch" type="search" data-memo-search placeholder="メモを検索（タイトル・本文・文字起こし）" autocomplete="off">
+        <input id="taskMemoSearch" type="search" data-memo-search placeholder="メモを検索（漢字・かな・英字）" autocomplete="off">
         <div class="memo-picker-list" data-memo-picker-list>
           ${memos.map((memo) => {
             const preview = truncate(getMemoPreviewText(memo), 120);
@@ -3795,7 +3886,7 @@
     );
     return `
       <div id="memoTasks" class="task-picker">
-        <input id="memoTaskSearch" type="search" data-task-search placeholder="タスク名で検索（ひらがな/カタカナ対応）" autocomplete="off">
+        <input id="memoTaskSearch" type="search" data-task-search placeholder="タスク名で検索（漢字・かな・英字）" autocomplete="off">
         <div class="task-picker-list" data-task-picker-list>
           ${tasks.map((task) => {
             const meta = [
@@ -3821,18 +3912,16 @@
 
   function filterTaskPicker(input) {
     const picker = input.closest(".task-picker");
-    const query = normalizeSearchText(input.value);
     picker?.querySelectorAll("[data-search-text]").forEach((item) => {
-      const matches = !query || item.dataset.searchText.includes(query);
+      const matches = normalizedSearchTextMatches(item.dataset.searchText || "", input.value);
       item.classList.toggle("hidden", !matches);
     });
   }
 
   function filterMemoPicker(input) {
     const picker = input.closest(".memo-picker");
-    const query = normalizeSearchText(input.value);
     picker?.querySelectorAll("[data-search-text]").forEach((item) => {
-      const matches = !query || item.dataset.searchText.includes(query);
+      const matches = normalizedSearchTextMatches(item.dataset.searchText || "", input.value);
       item.classList.toggle("hidden", !matches);
     });
   }
@@ -4012,9 +4101,7 @@
 
   function matchesEntryItem(item, kind, filter = "all", query = "") {
     if (!matchesEntryFilter(item, kind, filter)) return false;
-    const normalizedQuery = normalizeSearchText(query);
-    if (!normalizedQuery) return true;
-    return normalizeSearchText(entrySearchText(item, kind)).includes(normalizedQuery);
+    return searchTextMatches(entrySearchText(item, kind), query);
   }
 
   function matchesEntryFilter(item, kind, filter = "all") {
@@ -4032,13 +4119,14 @@
   }
 
   function entrySearchText(item, kind) {
+    const department = findById(app.state.departments, item.departmentId);
     if (kind === "task") {
-      return [item.title, item.description, item.assignee, item.actionDate, item.dueDate].filter(Boolean).join(" ");
+      return [item.title, item.description, item.assignee, item.actionDate, item.dueDate, item.priority, department?.name].filter(Boolean).join(" ");
     }
     if (kind === "memo") {
-      return [item.title, item.body, item.agenda, item.decisions, item.nextActions, item.transcript].filter(Boolean).join(" ");
+      return [item.title, item.body, item.agenda, item.decisions, item.nextActions, item.transcript, department?.name].filter(Boolean).join(" ");
     }
-    return [item.title, item.type, getPolicyContent(item)].filter(Boolean).join(" ");
+    return [item.title, item.type, getPolicyContent(item), department?.name].filter(Boolean).join(" ");
   }
 
   function matchesCalendarPolicyFilter(policy, filter = "all") {
@@ -4369,11 +4457,112 @@
   }
 
   function normalizeSearchText(value) {
+    const text = String(value || "").normalize("NFKC").toLowerCase();
+    const hiragana = toHiragana(text);
+    const compact = compactSearchToken(hiragana);
+    const variants = new Set([compact]);
+    const romaji = compactSearchToken(kanaToRomaji(hiragana));
+    if (romaji) variants.add(romaji);
+    addSearchAliases(variants, compact);
+    return [...variants].filter(Boolean).sort().join(" ");
+  }
+
+  function searchTextMatches(targetValue, queryValue) {
+    return normalizedSearchTextMatches(normalizeSearchText(targetValue), queryValue);
+  }
+
+  function normalizedSearchTextMatches(normalizedTarget, queryValue) {
+    const queryTokens = normalizeSearchText(queryValue).split(/\s+/).filter(Boolean);
+    if (!queryTokens.length) return true;
+    return queryTokens.some((token) => normalizedTarget.includes(token));
+  }
+
+  function addSearchAliases(variants, compactText) {
+    searchAliasGroups.forEach((group) => {
+      const tokens = group.map(normalizeAliasToken).filter(Boolean);
+      if (!tokens.some((token) => compactText.includes(token))) return;
+      tokens.forEach((token) => variants.add(token));
+      group.forEach((term) => {
+        const romaji = compactSearchToken(kanaToRomaji(toHiragana(String(term || "").normalize("NFKC").toLowerCase())));
+        if (romaji) variants.add(romaji);
+      });
+    });
+  }
+
+  function normalizeAliasToken(value) {
+    return compactSearchToken(toHiragana(String(value || "").normalize("NFKC").toLowerCase()));
+  }
+
+  function compactSearchToken(value) {
     return String(value || "")
-      .normalize("NFKC")
-      .toLowerCase()
-      .replace(/[\u30a1-\u30f6]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0x60))
-      .replace(/\s+/g, "");
+      .replace(/[\s!"#$%&'()*+,\.\/:;<=>?@[\\\]^_`{|}~ー－、。・「」『』（）［］【】]/g, "");
+  }
+
+  function toHiragana(value) {
+    return String(value || "").replace(/[\u30a1-\u30f6]/g, (char) =>
+      String.fromCharCode(char.charCodeAt(0) - 0x60)
+    );
+  }
+
+  function kanaToRomaji(value) {
+    const digraphs = {
+      きゃ: "kya", きゅ: "kyu", きょ: "kyo",
+      しゃ: "sha", しゅ: "shu", しょ: "sho",
+      ちゃ: "cha", ちゅ: "chu", ちょ: "cho",
+      にゃ: "nya", にゅ: "nyu", にょ: "nyo",
+      ひゃ: "hya", ひゅ: "hyu", ひょ: "hyo",
+      みゃ: "mya", みゅ: "myu", みょ: "myo",
+      りゃ: "rya", りゅ: "ryu", りょ: "ryo",
+      ぎゃ: "gya", ぎゅ: "gyu", ぎょ: "gyo",
+      じゃ: "ja", じゅ: "ju", じょ: "jo",
+      びゃ: "bya", びゅ: "byu", びょ: "byo",
+      ぴゃ: "pya", ぴゅ: "pyu", ぴょ: "pyo",
+      ふぁ: "fa", ふぃ: "fi", ふぇ: "fe", ふぉ: "fo",
+      てぃ: "ti", でぃ: "di", うぃ: "wi", うぇ: "we", うぉ: "wo"
+    };
+    const kana = {
+      あ: "a", い: "i", う: "u", え: "e", お: "o",
+      か: "ka", き: "ki", く: "ku", け: "ke", こ: "ko",
+      さ: "sa", し: "shi", す: "su", せ: "se", そ: "so",
+      た: "ta", ち: "chi", つ: "tsu", て: "te", と: "to",
+      な: "na", に: "ni", ぬ: "nu", ね: "ne", の: "no",
+      は: "ha", ひ: "hi", ふ: "fu", へ: "he", ほ: "ho",
+      ま: "ma", み: "mi", む: "mu", め: "me", も: "mo",
+      や: "ya", ゆ: "yu", よ: "yo",
+      ら: "ra", り: "ri", る: "ru", れ: "re", ろ: "ro",
+      わ: "wa", を: "wo", ん: "n",
+      が: "ga", ぎ: "gi", ぐ: "gu", げ: "ge", ご: "go",
+      ざ: "za", じ: "ji", ず: "zu", ぜ: "ze", ぞ: "zo",
+      だ: "da", ぢ: "ji", づ: "zu", で: "de", ど: "do",
+      ば: "ba", び: "bi", ぶ: "bu", べ: "be", ぼ: "bo",
+      ぱ: "pa", ぴ: "pi", ぷ: "pu", ぺ: "pe", ぽ: "po",
+      ぁ: "a", ぃ: "i", ぅ: "u", ぇ: "e", ぉ: "o",
+      ゃ: "ya", ゅ: "yu", ょ: "yo", ゎ: "wa"
+    };
+    const source = toHiragana(value);
+    let result = "";
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      if (char === "っ") {
+        const nextPair = source.slice(index + 1, index + 3);
+        const next = digraphs[nextPair] || kana[source[index + 1]] || "";
+        const consonant = next.match(/^[bcdfghjklmnpqrstvwxyz]/)?.[0] || "";
+        result += consonant;
+        continue;
+      }
+      const pair = source.slice(index, index + 2);
+      if (digraphs[pair]) {
+        result += digraphs[pair];
+        index += 1;
+        continue;
+      }
+      if (kana[char]) {
+        result += kana[char];
+        continue;
+      }
+      if (/^[a-z0-9]$/.test(char)) result += char;
+    }
+    return result;
   }
 
   function matchDepartmentId(name) {
