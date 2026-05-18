@@ -11,7 +11,13 @@
   const CLASSIFICATION_LABEL = "分類";
   const OPERATIONS_LABEL = "運営情報";
   const ADD_DEPARTMENT_VALUE = "__add_department__";
+  const ADD_POLICY_TYPE_VALUE = "__add_policy_type__";
   const defaultPolicyTypes = ["方針", "月次", "週次", "半期", "分類", "施策", "イベント", "応援", "在庫", "売場", "商売計画"];
+  const memoFieldLabels = {
+    agenda: "論点",
+    decisions: "方針",
+    nextActions: "行動"
+  };
 
   const priorityMeta = {
     P1: { label: "最優先", className: "priority-p1" },
@@ -81,8 +87,11 @@
     recordingStopPromise: null,
     recordingStopResolve: null,
     recognition: null,
+    recognitionStopPromise: null,
+    recognitionStopResolve: null,
     dialogOrigin: null,
     pendingPolicySave: null,
+    settingsDrag: null,
     isComposingText: false,
     toastTimer: 0
   };
@@ -112,6 +121,10 @@
     document.body.addEventListener("click", handleClick);
     document.body.addEventListener("change", handleChange);
     document.body.addEventListener("input", handleInput);
+    document.body.addEventListener("pointerdown", handleSettingsDragStart);
+    document.body.addEventListener("pointermove", handleSettingsDragMove);
+    document.body.addEventListener("pointerup", handleSettingsDragEnd);
+    document.body.addEventListener("pointercancel", handleSettingsDragEnd);
     document.body.addEventListener("compositionstart", handleCompositionStart);
     document.body.addEventListener("compositionend", handleCompositionEnd);
     document.body.addEventListener("keydown", handleKeydown);
@@ -119,6 +132,7 @@
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") stopAudioCaptureImmediately();
     });
+    window.addEventListener("resize", () => updateNavIndicator());
     window.addEventListener("pagehide", stopAudioCaptureImmediately);
   }
 
@@ -412,8 +426,12 @@
     const navRect = bottomNav.getBoundingClientRect();
     const buttonRect = button.getBoundingClientRect();
     if (!navRect.width || !buttonRect.width) return;
-    bottomNav.style.setProperty("--nav-indicator-x", `${buttonRect.left - navRect.left}px`);
-    bottomNav.style.setProperty("--nav-indicator-width", `${buttonRect.width}px`);
+    const inset = 3;
+    const x = Math.max(inset, buttonRect.left - navRect.left + inset);
+    const maxWidth = Math.max(0, navRect.width - x - inset);
+    const width = Math.min(Math.max(0, buttonRect.width - inset * 2), maxWidth);
+    bottomNav.style.setProperty("--nav-indicator-x", `${x}px`);
+    bottomNav.style.setProperty("--nav-indicator-width", `${width}px`);
   }
 
   function normalizeActiveTab(tab) {
@@ -446,11 +464,8 @@
         ${renderStat("運営", relatedPolicies.length, "policies")}
       </section>
       ${overdue.length ? renderTaskSection("DL超過", overdue, "DLが過ぎています") : ""}
-      ${["P1", "P2", "P3", "SUB"].map((priority) => {
-        const tasks = todayTasks.filter((task) => task.priority === priority);
-        const emptyAction = priority === "SUB" ? "" : `<button class="mini-button" type="button" data-action="add-task-slot" data-priority="${priority}" data-date="${date}">この枠に追加</button>`;
-        return renderTaskSection(priorityMeta[priority].label, tasks, "空き", emptyAction, date);
-      }).join("")}
+      ${renderTodayPriorityFocus(date, todayTasks)}
+      ${renderTaskSection(priorityMeta.SUB.label, todayTasks.filter((task) => task.priority === "SUB"), "サブタスクはありません", "", date)}
       <section class="section">
         <div class="section-head">
           <h2 class="section-title">今日に関係する運営情報</h2>
@@ -461,6 +476,47 @@
         </div>
       </section>
       ${app.state.settings.showCompleted ? renderTaskSection("今日完了", completedToday, "今日完了したタスクはありません", "", date) : ""}
+    `;
+  }
+
+  function renderTodayPriorityFocus(date, todayTasks) {
+    const priorities = ["P1", "P2", "P3"];
+    return `
+      <section class="section priority-focus-section" aria-label="優先タスク">
+        <div class="section-head">
+          <h2 class="section-title">優先タスク</h2>
+          <span class="section-count">${priorities.reduce((total, priority) => total + todayTasks.filter((task) => task.priority === priority).length, 0)}件</span>
+        </div>
+        <div class="priority-focus-grid">
+          ${priorities.map((priority) => renderTodayPrioritySlot(priority, todayTasks.filter((task) => task.priority === priority), date)).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderTodayPrioritySlot(priority, tasks, date) {
+    const meta = priorityMeta[priority] || priorityMeta.SUB;
+    const task = tasks[0] || null;
+    const extra = Math.max(0, tasks.length - 1);
+    const cardAction = task ? ` data-card-action="edit-task" data-id="${escapeAttr(task.id)}" tabindex="0"` : "";
+    return `
+      <article class="priority-focus-slot priority-focus-${priority.toLowerCase()} ${task ? "has-task" : "is-empty"}"${cardAction}>
+        <div class="priority-focus-head">
+          <strong>${escapeHtml(meta.label)}</strong>
+          <span>${tasks.length}件</span>
+        </div>
+        ${task ? `
+          <button class="title-button priority-focus-title" type="button" data-action="edit-task" data-id="${escapeAttr(task.id)}">${escapeHtml(task.title)}</button>
+          <div class="meta-row">
+            ${task.dueDate ? `<span class="tag">DL ${formatShortDate(task.dueDate)}</span>` : ""}
+            ${task.assignee ? `<span class="tag">担当 ${escapeHtml(task.assignee)}</span>` : ""}
+            ${extra ? `<span class="tag">ほか${extra}件</span>` : ""}
+          </div>
+        ` : `
+          <p class="priority-focus-empty">空き</p>
+          <button class="mini-button" type="button" data-action="add-task-slot" data-priority="${priority}" data-date="${escapeAttr(date)}">この枠に追加</button>
+        `}
+      </article>
     `;
   }
 
@@ -616,17 +672,38 @@
   }
 
   function renderCalendarDayBadges(isoDate, filter) {
-    const periods = getCalendarPeriodsForDate(isoDate, filter).slice(0, 3);
+    const groups = getCalendarPeriodGroupsForDate(isoDate, filter).slice(0, 3);
     const badges = [];
-    periods.forEach((period) => {
+    groups.forEach((group) => {
       const classes = [
         "day-badge",
         "day-badge-period",
-        `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
+        `period-line-${stableIndex(group.type, PERIOD_LINE_CLASS_COUNT)}`
       ].join(" ");
-      badges.push(`<span class="${classes}" title="${escapeAttr(`${period.type}: ${period.title}`)}">${escapeHtml(compactPeriodType(period.type))}</span>`);
+      const label = `${compactPeriodType(group.type)}${group.count > 1 ? group.count : ""}`;
+      badges.push(`<span class="${classes}" title="${escapeAttr(`${group.type}: ${group.count}件`)}">${escapeHtml(label)}</span>`);
     });
     return badges.length ? `<span class="day-badge-stack" aria-label="日付の予定">${badges.join("")}</span>` : "";
+  }
+
+  function getCalendarPeriodGroupsForDate(isoDate, filter) {
+    const groups = new Map();
+    getCalendarPeriodsForDate(isoDate, filter).forEach((period) => {
+      const type = normalizePolicyType(period.type || "方針");
+      const current = groups.get(type) || {
+        type,
+        count: 0,
+        firstStart: period.start || isoDate,
+        firstTitle: period.title || ""
+      };
+      current.count += 1;
+      groups.set(type, current);
+    });
+    return [...groups.values()].sort((a, b) =>
+      String(a.firstStart).localeCompare(String(b.firstStart)) ||
+      String(a.type).localeCompare(String(b.type)) ||
+      String(a.firstTitle).localeCompare(String(b.firstTitle))
+    );
   }
 
   function renderCalendarDueBadge(dueCount) {
@@ -780,6 +857,7 @@
           <span class="recording-status" id="recordingStatus" data-recording-status>録音待機中</span>
         </div>
         <textarea id="quickMemoText" placeholder="とっさの話し合い、指示、気づきをそのまま入力"></textarea>
+        <input type="hidden" data-recording-transcript-draft value="">
         <div id="recordingTranscriptPreview" class="transcript-preview hidden" data-recording-transcript-preview aria-live="polite"></div>
         <div class="recording-bar">
           <button class="solid-button compact" type="button" data-action="save-quick-memo">保存</button>
@@ -1035,9 +1113,9 @@
     if (action === "purge-deleted-item") await purgeDeletedItem(id);
     if (action === "save-quick-memo") await saveQuickMemo();
     if (action === "start-recording") await startRecording();
-    if (action === "stop-recording") stopRecording();
+    if (action === "stop-recording") await stopRecording();
     if (action === "start-transcription") startTranscription();
-    if (action === "stop-transcription") stopTranscription();
+    if (action === "stop-transcription") await stopTranscription();
     if (action === "month-prev") await changeMonth(-1);
     if (action === "month-next") await changeMonth(1);
     if (action === "select-day") await selectDay(button.dataset.date);
@@ -1101,6 +1179,10 @@
       await handleDepartmentSelectChange(event.target);
       return;
     }
+    if (event.target.name === "type") {
+      await handlePolicyTypeSelectChange(event.target);
+      return;
+    }
     if (event.target.id === "settingsImportFile") {
       await readImportFile(event.target);
       return;
@@ -1132,6 +1214,9 @@
   function handleInput(event) {
     if (event.target.matches("[data-task-search]")) {
       filterTaskPicker(event.target);
+    }
+    if (event.target.matches("[data-memo-search]")) {
+      filterMemoPicker(event.target);
     }
     if (event.target.id === "entrySearch") {
       if (app.isComposingText || event.isComposing) return;
@@ -1234,6 +1319,29 @@
     showToast("分類を追加しました。");
   }
 
+  async function handlePolicyTypeSelectChange(select) {
+    if (!(select instanceof HTMLSelectElement)) return;
+    if (select.value === ADD_POLICY_TYPE_VALUE) {
+      await addPolicyTypeFromSelect(select);
+      return;
+    }
+    select.dataset.currentValue = select.value;
+  }
+
+  async function addPolicyTypeFromSelect(select) {
+    const previousValue = select.dataset.currentValue || "方針";
+    const enteredName = window.prompt("新しい種別名", "新しい種別");
+    if (enteredName === null) {
+      select.value = previousValue;
+      return;
+    }
+    const name = normalizePolicyType(enteredName);
+    app.state.settings.policyTypes = normalizePolicyTypes(getPolicyTypes().concat(name));
+    await saveState();
+    refreshPolicyTypeSelects(select, name);
+    showToast("運営情報の種別を追加しました。");
+  }
+
   function refreshDepartmentSelects(activeSelect, activeValue) {
     document.querySelectorAll('select[name="departmentId"]').forEach((select) => {
       const current = select === activeSelect
@@ -1248,6 +1356,22 @@
   function normalizeDepartmentFormValue(value) {
     const text = String(value || "");
     return text === ADD_DEPARTMENT_VALUE ? "" : text;
+  }
+
+  function refreshPolicyTypeSelects(activeSelect, activeValue) {
+    document.querySelectorAll('select[name="type"]').forEach((select) => {
+      const current = select === activeSelect
+        ? activeValue
+        : normalizePolicyTypeFormValue(select.value);
+      select.innerHTML = renderPolicyTypeOptions(current);
+      select.value = current;
+      select.dataset.currentValue = current;
+    });
+  }
+
+  function normalizePolicyTypeFormValue(value) {
+    const text = String(value || "");
+    return text === ADD_POLICY_TYPE_VALUE ? "方針" : normalizePolicyType(text || "方針");
   }
 
   function openAddForCurrentContext() {
@@ -1418,7 +1542,7 @@
     resetRecordingDraft();
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader(existing ? "メモ編集" : "メモ追加", "走り書きから始めて、後で議題や決定事項を整えられます。")}
+        ${renderSheetHeader(existing ? "メモ編集" : "メモ追加", "走り書きから始めて、後で論点・方針・行動へ整えられます。")}
         <form id="memoForm" class="form-grid" data-id="${escapeAttr(value.id)}">
           <div class="field">
             <label for="memoTitle">タイトル</label>
@@ -1433,6 +1557,7 @@
               <button class="ghost-button compact" type="button" data-action="start-recording">録音</button>
               <button class="ghost-button compact" type="button" data-action="stop-recording" disabled>停止</button>
             </div>
+            <input type="hidden" data-recording-transcript-draft value="">
             <div class="transcript-preview hidden" data-recording-transcript-preview aria-live="polite"></div>
           </section>
           <div class="field">
@@ -1441,18 +1566,19 @@
           </div>
           <div class="toolbar">
             <button class="ghost-button compact" type="button" data-action="classify-memo-form">自動判定</button>
+            <span class="classify-status" data-classify-status></span>
           </div>
           <div class="field-inline">
             <div class="field">
-              <label for="memoAgenda">議題</label>
+              <label for="memoAgenda">${memoFieldLabels.agenda}</label>
               <textarea id="memoAgenda" name="agenda">${escapeHtml(value.agenda)}</textarea>
             </div>
             <div class="field">
-              <label for="memoDecisions">決まったこと</label>
+              <label for="memoDecisions">${memoFieldLabels.decisions}</label>
               <textarea id="memoDecisions" name="decisions">${escapeHtml(value.decisions)}</textarea>
             </div>
             <div class="field">
-              <label for="memoNextActions">ネクストアクション</label>
+              <label for="memoNextActions">${memoFieldLabels.nextActions}</label>
               <textarea id="memoNextActions" name="nextActions">${escapeHtml(value.nextActions)}</textarea>
             </div>
           </div>
@@ -1515,7 +1641,7 @@
           <div class="field-inline">
             <div class="field">
               <label for="policyType">種別</label>
-              <select id="policyType" name="type">
+              <select id="policyType" name="type" data-current-value="${escapeAttr(value.type)}">
                 ${renderPolicyTypeOptions(value.type)}
               </select>
             </div>
@@ -1667,7 +1793,7 @@
     if (!date) {
       return `
         <div class="availability-row availability-row-empty">
-          <span class="availability-note">実施日を選ぶと、その日の優先度の空き状況を表示します。</span>
+          <span class="availability-note">実施日がないタスクはサブタスクとして保存します。実施日を選ぶと、その日の優先度を選べます。</span>
         </div>
       `;
     }
@@ -1683,7 +1809,7 @@
     }).join("");
     return `
       <div class="availability-row">${rows}</div>
-      <p class="availability-note">未選択時はサブタスクに入ります。</p>
+      <p class="availability-note">最優先、2次優先、3次優先、サブタスクのどれかで保存します。</p>
     `;
   }
 
@@ -1903,7 +2029,11 @@
     const id = form.dataset.id || uid("memo");
     const existing = findById(app.state.memos, id);
     const body = String(data.get("body") || "").trim();
-    const transcript = appendText(String(data.get("transcript") || "").trim(), app.pendingRecordingTranscript.trim()).trim();
+    const transcriptDraft = form.querySelector("[data-recording-transcript-draft]")?.value || "";
+    const transcript = appendUniqueText(
+      appendUniqueText(String(data.get("transcript") || "").trim(), app.pendingRecordingTranscript.trim()),
+      transcriptDraft
+    ).trim();
     const recordings = [...(existing?.recordings || []), ...app.pendingRecordings];
     const now = nowIso();
     const memo = normalizeMemo({
@@ -1963,7 +2093,7 @@
       ...existing,
       id: form.dataset.id || uid("policy"),
       title: String(data.get("title") || "").trim(),
-      type: normalizePolicyType(data.get("type") || "方針"),
+      type: normalizePolicyTypeFormValue(data.get("type") || "方針"),
       periodStart: periodMode === "draft" ? (picker?.dataset.draftStart || "") : String(data.get("periodStart") || ""),
       periodEnd: periodMode === "draft" ? (picker?.dataset.draftEnd || "") : String(data.get("periodEnd") || ""),
       departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
@@ -2257,12 +2387,29 @@
     const body = String(form.elements.body?.value || "");
     const transcript = String(form.elements.transcript?.value || "");
     const source = [title, body, transcript].filter(Boolean).join("\n");
-    const organized = await classifyMemoText(source);
-    if (!form.elements.title.value.trim()) form.elements.title.value = organized.title;
-    form.elements.agenda.value = organized.agenda;
-    form.elements.decisions.value = organized.decisions;
-    form.elements.nextActions.value = organized.nextActions;
-    showToast("タイトル、本文、文字起こしから判定しました。保存前に確認してください。");
+    if (!source.trim()) {
+      showToast("判定するタイトル、本文、文字起こしを入力してください。");
+      return;
+    }
+    const button = form.querySelector('[data-action="classify-memo-form"]');
+    const status = form.querySelector("[data-classify-status]");
+    if (button) button.disabled = true;
+    if (status) status.textContent = "判定中";
+    try {
+      const organized = await classifyMemoText(source);
+      if (!form.isConnected) {
+        showToast("判定が完了しました。メモ画面を開き直して確認してください。");
+        return;
+      }
+      if (!form.elements.title.value.trim()) form.elements.title.value = organized.title;
+      form.elements.agenda.value = organized.agenda;
+      form.elements.decisions.value = organized.decisions;
+      form.elements.nextActions.value = organized.nextActions;
+      if (status) status.textContent = "反映済み";
+      showToast("タイトル、本文、文字起こしから論点・方針・行動へ判定しました。");
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   async function classifyMemoText(text) {
@@ -2288,9 +2435,9 @@
         input: text,
         schema: {
           title: "string",
-          agenda: "string",
-          decisions: "string",
-          nextActions: "string"
+          agenda: memoFieldLabels.agenda,
+          decisions: memoFieldLabels.decisions,
+          nextActions: memoFieldLabels.nextActions
         }
       })
     });
@@ -2299,9 +2446,9 @@
     const result = data.result && typeof data.result === "object" ? data.result : data;
     return {
       title: String(result.title || firstLine(text) || "メモ"),
-      agenda: String(result.agenda || ""),
-      decisions: String(result.decisions || ""),
-      nextActions: String(result.nextActions || "")
+      agenda: String(result.agenda || result.issues || result["論点"] || ""),
+      decisions: String(result.decisions || result.policy || result["方針"] || ""),
+      nextActions: String(result.nextActions || result.actions || result["行動"] || "")
     };
   }
 
@@ -2403,7 +2550,8 @@
     await ensureRecordingStopped();
     const textarea = document.getElementById("quickMemoText");
     const body = textarea?.value.trim() || "";
-    const transcript = app.pendingRecordingTranscript.trim();
+    const transcriptDraft = document.querySelector("[data-recording-transcript-draft]")?.value || "";
+    const transcript = appendUniqueText(app.pendingRecordingTranscript, transcriptDraft).trim();
     const recordings = [...app.pendingRecordings];
     if (!body && !transcript && !recordings.length) {
       showToast("本文または録音を入力してください。");
@@ -2459,7 +2607,7 @@
   }
 
   async function stopRecording() {
-    stopTranscription();
+    await stopTranscription();
     if (app.mediaRecorder && app.mediaRecorder.state !== "inactive") {
       try {
         app.mediaRecorder.requestData?.();
@@ -2527,6 +2675,9 @@
     recognition.lang = "ja-JP";
     recognition.continuous = true;
     recognition.interimResults = true;
+    app.recognitionStopPromise = new Promise((resolve) => {
+      app.recognitionStopResolve = resolve;
+    });
     recognition.addEventListener("result", (event) => {
       let finalText = "";
       let interimText = "";
@@ -2554,6 +2705,9 @@
     });
     recognition.addEventListener("end", () => {
       if (app.recognition === recognition) app.recognition = null;
+      app.recognitionStopResolve?.();
+      app.recognitionStopPromise = null;
+      app.recognitionStopResolve = null;
       updateRecordingButtons();
     });
     try {
@@ -2563,14 +2717,18 @@
       return true;
     } catch {
       app.recognition = null;
+      app.recognitionStopResolve?.();
+      app.recognitionStopPromise = null;
+      app.recognitionStopResolve = null;
       updateRecordingButtons(app.mediaRecorder ? "録音中（文字起こし開始失敗）" : "");
       showToast("文字起こしを開始できませんでした。");
       return false;
     }
   }
 
-  function stopTranscription(options = {}) {
+  async function stopTranscription(options = {}) {
     const recognition = app.recognition;
+    const stopPromise = app.recognitionStopPromise;
     app.recognition = null;
     if (recognition) {
       try {
@@ -2579,6 +2737,7 @@
       } catch {}
     }
     updateRecordingButtons();
+    if (stopPromise) await Promise.race([stopPromise, wait(900)]);
   }
 
   function updateRecordingButtons(status = "") {
@@ -2596,6 +2755,9 @@
 
   function updateTranscriptPreview(text) {
     const clean = String(text || "").trim();
+    document.querySelectorAll("[data-recording-transcript-draft]").forEach((field) => {
+      field.value = clean;
+    });
     document.querySelectorAll("[data-recording-transcript-preview]").forEach((preview) => {
       preview.textContent = clean ? `文字起こし: ${truncate(clean, 260)}` : "";
       preview.classList.toggle("hidden", !clean);
@@ -2615,6 +2777,8 @@
     app.pendingRecordingTranscript = "";
     app.recordingStopPromise = null;
     app.recordingStopResolve = null;
+    app.recognitionStopPromise = null;
+    app.recognitionStopResolve = null;
     updateTranscriptPreview("");
     updateRecordingButtons();
   }
@@ -2640,6 +2804,16 @@
     const right = String(addition || "").trim();
     if (!left) return right;
     if (!right) return left;
+    return `${left}\n${right}`;
+  }
+
+  function appendUniqueText(base, addition) {
+    const left = String(base || "").trim();
+    const right = String(addition || "").trim();
+    if (!left) return right;
+    if (!right) return left;
+    if (left.includes(right)) return left;
+    if (right.includes(left)) return right;
     return `${left}\n${right}`;
   }
 
@@ -2782,11 +2956,8 @@
   function renderDepartmentRow(department) {
     return `
       <div class="list-row" data-row="department" data-id="${escapeAttr(department.id)}">
+        <button class="drag-handle" type="button" data-drag-handle aria-label="ドラッグして分類を並び替え">☰</button>
         <input name="departmentName" value="${escapeAttr(department.name)}" aria-label="分類名">
-        <div class="list-row-order" aria-label="分類の並び替え">
-          <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="up" aria-label="上へ">↑</button>
-          <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="down" aria-label="下へ">↓</button>
-        </div>
         <button class="mini-button" type="button" data-action="remove-settings-row">削除</button>
       </div>
     `;
@@ -2796,11 +2967,8 @@
     const id = uid("policy-type");
     return `
       <div class="list-row" data-row="policyType" data-id="${escapeAttr(id)}">
+        <button class="drag-handle" type="button" data-drag-handle aria-label="ドラッグして種別を並び替え">☰</button>
         <input name="policyTypeName" value="${escapeAttr(type)}" aria-label="運営情報の種別">
-        <div class="list-row-order" aria-label="種別の並び替え">
-          <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="up" aria-label="上へ">↑</button>
-          <button class="mini-button order-button" type="button" data-action="move-settings-row" data-direction="down" aria-label="下へ">↓</button>
-        </div>
         <button class="mini-button" type="button" data-action="remove-settings-row">削除</button>
       </div>
     `;
@@ -2928,6 +3096,42 @@
     if (button.dataset.direction === "down" && row.nextElementSibling) {
       parent.insertBefore(row.nextElementSibling, row);
     }
+  }
+
+  function handleSettingsDragStart(event) {
+    const handle = event.target.closest("[data-drag-handle]");
+    if (!handle) return;
+    const row = handle.closest(".list-row");
+    const list = row?.parentElement;
+    if (!row || !list || list.classList.contains("is-collapsed")) return;
+    event.preventDefault();
+    handle.setPointerCapture?.(event.pointerId);
+    row.classList.add("is-dragging");
+    app.settingsDrag = {
+      pointerId: event.pointerId,
+      row,
+      list,
+      handle
+    };
+  }
+
+  function handleSettingsDragMove(event) {
+    const drag = app.settingsDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const targetRow = document.elementFromPoint(event.clientX, event.clientY)?.closest(".list-row");
+    if (!targetRow || targetRow === drag.row || targetRow.parentElement !== drag.list) return;
+    const rect = targetRow.getBoundingClientRect();
+    const before = event.clientY < rect.top + rect.height / 2;
+    drag.list.insertBefore(drag.row, before ? targetRow : targetRow.nextElementSibling);
+  }
+
+  function handleSettingsDragEnd(event) {
+    const drag = app.settingsDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag.row.classList.remove("is-dragging");
+    drag.handle.releasePointerCapture?.(event.pointerId);
+    app.settingsDrag = null;
   }
 
   async function applyBundledTaskImport() {
@@ -3109,9 +3313,9 @@
       memos: (source.memos || source.notes || []).map((memo) => ({
         title: memo.title || firstLine(memo.body || memo.content) || "メモ",
         body: memo.body || memo.content || "",
-        agenda: memo.agenda || memo.議題 || "",
-        decisions: memo.decisions || memo.決定 || "",
-        nextActions: memo.nextActions || memo.次 || "",
+        agenda: memo.agenda || memo.論点 || memo.議題 || "",
+        decisions: memo.decisions || memo.方針 || memo.決定 || "",
+        nextActions: memo.nextActions || memo.行動 || memo.次 || "",
         transcript: memo.transcript || memo.文字起こし || "",
         dueDate: "",
         priority: normalizePriority(memo.priority || memo.優先度),
@@ -3385,9 +3589,9 @@
   }
 
   function renderPolicyTypeOptions(current) {
-    return getPolicyTypes(current).map((type) =>
+    return `${getPolicyTypes(current).map((type) =>
       `<option value="${escapeAttr(type)}"${selected(current, type)}>${escapeHtml(type)}</option>`
-    ).join("");
+    ).join("")}<option value="${ADD_POLICY_TYPE_VALUE}">＋ 新しい種別を追加</option>`;
   }
 
   function renderPolicyPeriodField(start = "", end = "") {
@@ -3486,6 +3690,14 @@
     picker.dataset.savedStart = start;
     picker.dataset.savedEnd = end;
     refreshPolicyPeriodPicker(picker);
+    const status = picker.querySelector(".period-save-state");
+    const saveButton = picker.querySelector('[data-action="save-policy-period"]');
+    status?.classList.add("is-confirmed");
+    saveButton?.classList.add("is-confirmed");
+    window.setTimeout(() => {
+      status?.classList.remove("is-confirmed");
+      saveButton?.classList.remove("is-confirmed");
+    }, 900);
     showToast("期間を保存しました。");
   }
 
@@ -3505,13 +3717,13 @@
   }
 
   function periodSaveStateLabel(start = "", end = "") {
-    return start || end ? "期間あり" : "期間なし";
+    return formatPolicyPeriodRange(start, end) || "期間なし";
   }
 
   function formatPolicyPeriodRange(start = "", end = "") {
-    if (start && end) return `${formatShortDate(start)} - ${formatShortDate(end)}`;
-    if (start) return `${formatShortDate(start)} -`;
-    if (end) return `- ${formatShortDate(end)}`;
+    if (start && end) return `${formatShortDate(start)}-${formatShortDate(end)}`;
+    if (start) return `${formatShortDate(start)}-`;
+    if (end) return `-${formatShortDate(end)}`;
     return "";
   }
 
@@ -3549,18 +3761,23 @@
     if (!memos.length) return `<p class="body-preview">関連付けできるメモはまだありません。</p>`;
     return `
       <div class="memo-picker">
-        ${memos.map((memo) => {
-          const preview = truncate(getMemoPreviewText(memo), 120);
-          return `
-            <label class="memo-picker-item ${current.has(memo.id) ? "is-linked" : ""}">
-              <input type="checkbox" name="memoIds" value="${escapeAttr(memo.id)}"${current.has(memo.id) ? " checked" : ""}>
-              <span>
-                <strong>${escapeHtml(memo.title || "メモ")}</strong>
-                ${preview ? `<small>${escapeHtml(preview)}</small>` : ""}
-              </span>
-            </label>
-          `;
-        }).join("")}
+        <input id="taskMemoSearch" type="search" data-memo-search placeholder="メモを検索（タイトル・本文・文字起こし）" autocomplete="off">
+        <div class="memo-picker-list" data-memo-picker-list>
+          ${memos.map((memo) => {
+            const preview = truncate(getMemoPreviewText(memo), 120);
+            const searchText = normalizeSearchText([memo.title, memo.body, memo.transcript, memo.agenda, memo.decisions, memo.nextActions].filter(Boolean).join(" "));
+            return `
+              <label class="memo-picker-item ${current.has(memo.id) ? "is-linked" : ""}" data-search-text="${escapeAttr(searchText)}">
+                <input type="checkbox" name="memoIds" value="${escapeAttr(memo.id)}"${current.has(memo.id) ? " checked" : ""}>
+                <span>
+                  <strong>${escapeHtml(memo.title || "メモ")}</strong>
+                  ${current.has(memo.id) ? `<small>現在紐付け中</small>` : ""}
+                  ${preview ? `<small>${escapeHtml(preview)}</small>` : ""}
+                </span>
+              </label>
+            `;
+          }).join("")}
+        </div>
       </div>
     `;
   }
@@ -3604,6 +3821,15 @@
 
   function filterTaskPicker(input) {
     const picker = input.closest(".task-picker");
+    const query = normalizeSearchText(input.value);
+    picker?.querySelectorAll("[data-search-text]").forEach((item) => {
+      const matches = !query || item.dataset.searchText.includes(query);
+      item.classList.toggle("hidden", !matches);
+    });
+  }
+
+  function filterMemoPicker(input) {
+    const picker = input.closest(".memo-picker");
     const query = normalizeSearchText(input.value);
     picker?.querySelectorAll("[data-search-text]").forEach((item) => {
       const matches = !query || item.dataset.searchText.includes(query);
@@ -3759,6 +3985,7 @@
     lines.forEach((line) => {
       if (/(決定|決ま|することに|方針|で進める)/.test(line)) decisions.push(line);
       else if (/(→|対応|確認|依頼|作成|送る|提出|DL|まで|次回|やる)/i.test(line)) nextActions.push(line);
+      else if (/(論点|課題|懸念|確認したい|なぜ|どうする|検討)/.test(line)) agenda.push(line);
       else agenda.push(line);
     });
     return {
