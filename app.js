@@ -124,6 +124,7 @@
     recognitionStopPromise: null,
     recognitionStopResolve: null,
     dialogOrigin: null,
+    pendingCloseRequest: null,
     pendingPolicySave: null,
     settingsDrag: null,
     isComposingText: false,
@@ -164,6 +165,8 @@
     document.body.addEventListener("compositionend", handleCompositionEnd);
     document.body.addEventListener("keydown", handleKeydown);
     document.addEventListener("submit", handleSubmit);
+    entityDialog.addEventListener("cancel", handleDialogCancel);
+    conflictDialog.addEventListener("cancel", handleDialogCancel);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") stopAudioCaptureImmediately();
     });
@@ -239,6 +242,7 @@
         entryKind: "all",
         entryFilter: "all",
         entrySearch: "",
+        memoSort: "updated-new",
         calendarMonth: monthKey(new Date()),
         selectedDate: todayIso()
       },
@@ -314,6 +318,8 @@
       assignee: task.assignee || "",
       actionDate: task.actionDate || "",
       dueDate: task.dueDate || "",
+      startTime: normalizeTaskTime(task.startTime),
+      endTime: normalizeTaskTime(task.endTime),
       priority: normalizeTaskPriority(task.priority),
       status: task.status || "active",
       departmentId: task.departmentId || "",
@@ -502,12 +508,13 @@
     const overdue = sortTasks(activeTasks.filter((task) => task.dueDate && task.dueDate < date && !taskOccursOnDate(task, date)));
     const completedToday = sortTasks(app.state.tasks.filter((task) => isTaskCompletedForDate(task, date)));
     const relatedPolicies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
+    const todayMemos = getTodayMemos(date);
 
     view.innerHTML = `
       <section class="dashboard-grid" aria-label="今日の数">
         ${renderStat("実施", todayTasks.length, "tasks")}
         ${renderStat("DL超過", overdue.length, "overdue")}
-        ${renderStat("メモ", app.state.memos.length, "memos")}
+        ${renderStat("メモ", todayMemos.length, "memos")}
         ${renderStat("運営", relatedPolicies.length, "policies")}
       </section>
       ${overdue.length ? renderTaskSection("DL超過", overdue, "DLが過ぎています") : ""}
@@ -555,6 +562,7 @@
         ${task ? `
           <button class="title-button priority-focus-title" type="button" data-action="edit-task" data-id="${escapeAttr(task.id)}">${escapeHtml(task.title)}</button>
           <div class="meta-row">
+            ${formatTaskTimeRange(task) ? `<span class="tag">${escapeHtml(formatTaskTimeRange(task))}</span>` : ""}
             ${task.dueDate ? `<span class="tag">DL ${formatShortDate(task.dueDate)}</span>` : ""}
             ${task.assignee ? `<span class="tag">担当 ${escapeHtml(task.assignee)}</span>` : ""}
             ${extra ? `<span class="tag">ほか${extra}件</span>` : ""}
@@ -599,15 +607,16 @@
     const kind = entryKindMeta[app.state.ui.entryKind] ? app.state.ui.entryKind : "all";
     const filter = app.state.ui.entryFilter || "all";
     const query = app.state.ui.entrySearch || "";
+    const memoSort = normalizeMemoSort(app.state.ui.memoSort);
+    app.state.ui.memoSort = memoSort;
     const activeTasks = sortTasksByActionDate(app.state.tasks.filter((task) =>
       task.status === "active" && matchesEntryItem(task, "task", filter, query)
     ));
     const completed = sortTasksByActionDate(app.state.tasks.filter((task) =>
       task.status === "completed" && matchesEntryItem(task, "task", filter, query)
     ));
-    const memos = app.state.memos
-      .filter((memo) => matchesEntryItem(memo, "memo", filter, query))
-      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const memos = sortMemos(app.state.memos
+      .filter((memo) => matchesEntryItem(memo, "memo", filter, query)), memoSort);
     const policies = app.state.policies
       .filter((policy) => matchesEntryItem(policy, "policy", filter, query))
       .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
@@ -633,7 +642,10 @@
       ${showMemos ? `<section class="section">
         <div class="section-head">
           <h2 class="section-title">メモ</h2>
-          <span class="section-count">${memos.length}件</span>
+          <div class="section-head-actions">
+            ${renderMemoSortControl(memoSort)}
+            <span class="section-count">${memos.length}件</span>
+          </div>
         </div>
         <div class="memo-list">
           ${memos.length ? memos.map(renderMemoCard).join("") : renderEmpty("該当するメモはありません。", "メモを追加")}
@@ -881,13 +893,18 @@
   }
 
   function renderMemosView() {
-    const memos = [...app.state.memos].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const memoSort = normalizeMemoSort(app.state.ui.memoSort);
+    app.state.ui.memoSort = memoSort;
+    const memos = sortMemos(app.state.memos, memoSort);
     view.innerHTML = `
       ${renderQuickCapture()}
       <section class="section">
         <div class="section-head">
           <h2 class="section-title">メモ一覧</h2>
-          <span class="section-count">${memos.length}件</span>
+          <div class="section-head-actions">
+            ${renderMemoSortControl(memoSort)}
+            <span class="section-count">${memos.length}件</span>
+          </div>
         </div>
         <div class="memo-list">
           ${memos.length ? memos.map(renderMemoCard).join("") : renderEmpty("メモはまだありません。", "メモを追加")}
@@ -946,7 +963,7 @@
     const activeTasks = app.state.tasks.filter((task) => task.status === "active");
     const todayTasks = sortTasks(activeTasks.filter((task) => taskOccursOnDate(task, date) && !isTaskCompletedForDate(task, date)));
     const overdue = sortTasks(activeTasks.filter((task) => task.dueDate && task.dueDate < date && !taskOccursOnDate(task, date)));
-    const memos = [...app.state.memos].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const memos = sortMemos(getTodayMemos(date), app.state.ui.memoSort);
     const policies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
     const summary = {
       tasks: {
@@ -961,7 +978,7 @@
       },
       memos: {
         title: "メモ",
-        subtitle: "保存済みメモ",
+        subtitle: "今日のタスクに紐づくメモ / 今日作成したメモ",
         html: memos.length ? `<div class="memo-list">${memos.map(renderMemoCard).join("")}</div>` : renderEmpty("メモはありません。", "メモを追加")
       },
       policies: {
@@ -1023,6 +1040,7 @@
           </div>
           <div class="meta-row">
             ${task.actionDate ? `<span class="tag">実施 ${formatShortDate(task.actionDate)}</span>` : ""}
+            ${formatTaskTimeRange(task) ? `<span class="tag">${escapeHtml(formatTaskTimeRange(task))}</span>` : ""}
             ${task.dueDate ? `<span class="tag">DL ${formatShortDate(task.dueDate)}</span>` : ""}
             ${task.assignee ? `<span class="tag">担当 ${escapeHtml(task.assignee)}</span>` : ""}
             ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
@@ -1055,6 +1073,8 @@
           ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
           ${linkedTasks.length ? `<span class="tag">関連タスク ${linkedTasks.length}</span>` : ""}
           ${recordings.length ? `<span class="tag">録音 ${recordings.length}</span>` : ""}
+          ${memo.createdAt ? `<span class="tag">作成 ${formatTimestampDate(memo.createdAt)}</span>` : ""}
+          ${memo.updatedAt ? `<span class="tag">更新 ${formatTimestampDate(memo.updatedAt)}</span>` : ""}
         </div>
         ${previewText ? `<button class="body-preview body-preview-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">${escapeHtml(previewText)}</button>` : ""}
         <div class="card-actions">
@@ -1102,6 +1122,12 @@
   }
 
   async function handleClick(event) {
+    if (event.target === entityDialog || event.target === conflictDialog) {
+      event.preventDefault();
+      requestCloseDialog(event.target);
+      return;
+    }
+
     const tabButton = event.target.closest("[data-tab]");
     if (tabButton) {
       const nextTab = normalizeActiveTab(tabButton.dataset.tab);
@@ -1127,7 +1153,10 @@
     if (action === "add-task-slot") openTaskForm(null, { actionDate: button.dataset.date, priority: button.dataset.priority });
     if (action === "open-settings") openSettings();
     if (action === "quick-import") openImportDialog();
-    if (action === "close-dialog") closeDialogs();
+    if (action === "close-dialog") requestCloseDialog(button.closest("dialog") || entityDialog);
+    if (action === "confirm-close-save") await savePendingCloseDialog();
+    if (action === "confirm-close-discard") discardPendingCloseDialog();
+    if (action === "confirm-close-cancel") cancelPendingCloseDialog();
     if (action === "open-kind") openKind(button.dataset.kind);
     if (action === "set-entry-kind") await setEntryKind(button.dataset.kind);
     if (action === "open-today-summary") openTodaySummaryDialog(button.dataset.summary);
@@ -1145,6 +1174,11 @@
     if (action === "period-month-next") changePolicyPeriodMonth(button, 1);
     if (action === "select-period-date") selectPolicyPeriodDate(button);
     if (action === "clear-policy-period") clearPolicyPeriod(button);
+    if (action === "toggle-task-date-picker") toggleTaskDatePicker(button);
+    if (action === "task-date-month-prev") changeTaskDatePickerMonth(button, -1);
+    if (action === "task-date-month-next") changeTaskDatePickerMonth(button, 1);
+    if (action === "select-task-date") selectTaskDate(button);
+    if (action === "clear-task-date") clearTaskDate(button);
     if (action === "toggle-task") await toggleTask(id, button.dataset.date || "");
     if (action === "move-today") await moveTaskToToday(id);
     if (action === "assign-today-priority") await assignTaskToToday(id, button.dataset.priority);
@@ -1255,6 +1289,11 @@
     }
     if (event.target.id === "entryFilter") {
       app.state.ui.entryFilter = event.target.value;
+      await saveState();
+      render();
+    }
+    if (event.target.id === "memoSort") {
+      app.state.ui.memoSort = normalizeMemoSort(event.target.value);
       await saveState();
       render();
     }
@@ -1499,6 +1538,8 @@
       assignee: existing?.assignee || defaults.assignee || "",
       actionDate: existing?.actionDate || defaults.actionDate || "",
       dueDate: existing?.dueDate || defaults.dueDate || "",
+      startTime: existing?.startTime || defaults.startTime || "",
+      endTime: existing?.endTime || defaults.endTime || "",
       priority: normalizeTaskPriority(existing?.priority || defaults.priority || "SUB"),
       departmentId: existing?.departmentId || defaults.departmentId || "",
       estimatedMinutes: existing?.estimatedMinutes || defaults.estimatedMinutes || "",
@@ -1514,13 +1555,17 @@
             <input id="taskTitle" name="title" required value="${escapeAttr(value.title)}" autocomplete="off">
           </div>
           <div class="field-inline task-date-row">
+            ${renderTaskDatePicker("actionDate", "taskActionDate", "実施", value.actionDate)}
+            ${renderTaskDatePicker("dueDate", "taskDueDate", "DL", value.dueDate)}
+          </div>
+          <div class="field-inline task-time-row">
             <div class="field">
-              <label for="taskActionDate">実施</label>
-              <input id="taskActionDate" name="actionDate" type="date">
+              <label for="taskStartTime">開始</label>
+              <input id="taskStartTime" name="startTime" type="time" value="${escapeAttr(value.startTime)}">
             </div>
             <div class="field">
-              <label for="taskDueDate">DL</label>
-              <input id="taskDueDate" name="dueDate" type="date">
+              <label for="taskEndTime">終了</label>
+              <input id="taskEndTime" name="endTime" type="time" value="${escapeAttr(value.endTime)}">
             </div>
           </div>
           <div class="field">
@@ -1561,6 +1606,7 @@
     initializeTaskDateInputs(value);
     updateRecurrenceForm(document.getElementById("taskForm"));
     updateTaskPriorityPreview(document.getElementById("taskForm"));
+    markDialogFormsPristine(entityDialog);
   }
 
   function initializeTaskDateInputs(value) {
@@ -1662,6 +1708,7 @@
     `);
     updateTranscriptPreview("");
     updateRecordingButtons();
+    markDialogFormsPristine(entityDialog);
   }
 
   function openPolicyForm(policy = null, defaults = {}) {
@@ -1745,6 +1792,109 @@
         `).join("")}
       </div>
     `;
+  }
+
+  function renderTaskDatePicker(name, id, label, value = "") {
+    const selectedDate = isIsoDate(value) ? value : "";
+    const month = monthKey(dateObject(selectedDate || app.state.ui.selectedDate || todayIso()));
+    return `
+      <div class="field task-date-picker" data-task-date-picker data-input-id="${escapeAttr(id)}" data-range-month="${escapeAttr(month)}" data-selected-date="${escapeAttr(selectedDate)}">
+        <label for="${escapeAttr(id)}">${escapeHtml(label)}</label>
+        <input id="${escapeAttr(id)}" name="${escapeAttr(name)}" type="hidden" value="${escapeAttr(selectedDate)}">
+        <div class="task-date-display-row">
+          <button class="task-date-display" type="button" data-action="toggle-task-date-picker" aria-expanded="false">
+            <span data-task-date-label>${selectedDate ? formatShortDate(selectedDate) : "未設定"}</span>
+          </button>
+          <button class="mini-button task-date-clear-button" type="button" data-action="clear-task-date">クリア</button>
+        </div>
+        <div class="task-date-calendar is-collapsed" data-task-date-calendar>
+          ${renderTaskDateCalendar(month, selectedDate)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTaskDateCalendar(month, selectedDate = "") {
+    const current = parseMonthKey(month || monthKey(new Date()));
+    const days = buildCalendarDays(current.year, current.month);
+    return `
+      <div class="task-date-picker-head">
+        <button class="mini-button month-nav-button" type="button" data-action="task-date-month-prev" aria-label="月を戻す"><span class="month-nav-chevron is-prev" aria-hidden="true"></span></button>
+        <strong>${current.year}年${current.month + 1}月</strong>
+        <button class="mini-button month-nav-button" type="button" data-action="task-date-month-next" aria-label="月を進める"><span class="month-nav-chevron is-next" aria-hidden="true"></span></button>
+      </div>
+      <div class="task-date-picker-grid">
+        ${["月", "火", "水", "木", "金", "土", "日"].map((day) => `<span>${day}</span>`).join("")}
+        ${days.map((day) => {
+          const iso = toDateInputValue(day.date);
+          const classes = [
+            "task-date-button",
+            day.inMonth ? "" : "is-muted",
+            calendarDateClass(day.date),
+            iso === selectedDate ? "is-selected" : "",
+            iso === todayIso() ? "is-today" : ""
+          ].filter(Boolean).join(" ");
+          return `<button class="${classes}" type="button" data-action="select-task-date" data-date="${iso}">${day.date.getDate()}</button>`;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  function toggleTaskDatePicker(button) {
+    const picker = button.closest("[data-task-date-picker]");
+    if (!picker) return;
+    const calendar = picker.querySelector("[data-task-date-calendar]");
+    const open = calendar?.classList.contains("is-collapsed");
+    document.querySelectorAll("[data-task-date-calendar]").forEach((item) => {
+      if (item !== calendar) item.classList.add("is-collapsed");
+    });
+    document.querySelectorAll('[data-action="toggle-task-date-picker"]').forEach((item) => {
+      if (item !== button) item.setAttribute("aria-expanded", "false");
+    });
+    calendar?.classList.toggle("is-collapsed", !open);
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  function changeTaskDatePickerMonth(button, delta) {
+    const picker = button.closest("[data-task-date-picker]");
+    if (!picker) return;
+    const current = parseMonthKey(picker.dataset.rangeMonth || monthKey(new Date()));
+    const date = new Date(current.year, current.month + delta, 1);
+    picker.dataset.rangeMonth = monthKey(date);
+    refreshTaskDatePicker(picker);
+  }
+
+  function selectTaskDate(button) {
+    const picker = button.closest("[data-task-date-picker]");
+    if (!picker) return;
+    const date = button.dataset.date || "";
+    picker.dataset.selectedDate = date;
+    picker.dataset.rangeMonth = monthKey(dateObject(date));
+    const input = picker.querySelector("input");
+    if (input) input.value = date;
+    refreshTaskDatePicker(picker);
+    picker.querySelector("[data-task-date-calendar]")?.classList.add("is-collapsed");
+    picker.querySelector('[data-action="toggle-task-date-picker"]')?.setAttribute("aria-expanded", "false");
+    updateTaskPriorityPreview(picker.closest("form"));
+  }
+
+  function clearTaskDate(button) {
+    const picker = button.closest("[data-task-date-picker]");
+    if (!picker) return;
+    picker.dataset.selectedDate = "";
+    const input = picker.querySelector("input");
+    if (input) input.value = "";
+    refreshTaskDatePicker(picker);
+    updateTaskPriorityPreview(picker.closest("form"));
+  }
+
+  function refreshTaskDatePicker(picker) {
+    const selectedDate = picker.dataset.selectedDate || "";
+    const month = picker.dataset.rangeMonth || monthKey(new Date());
+    const label = picker.querySelector("[data-task-date-label]");
+    const calendar = picker.querySelector("[data-task-date-calendar]");
+    if (label) label.textContent = selectedDate ? formatShortDate(selectedDate) : "未設定";
+    if (calendar) calendar.innerHTML = renderTaskDateCalendar(month, selectedDate);
   }
 
   function renderRecurrenceFields(recurrence) {
@@ -1889,6 +2039,8 @@
       assignee: String(data.get("assignee") || "").trim(),
       actionDate: String(data.get("actionDate") || ""),
       dueDate: String(data.get("dueDate") || ""),
+      startTime: normalizeTaskTime(data.get("startTime")),
+      endTime: normalizeTaskTime(data.get("endTime")),
       priority: normalizeTaskPriority(data.get("priority")),
       departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
       projectId: "",
@@ -1931,6 +2083,7 @@
   function openConflictDialog(task, conflicts) {
     const existingLabel = conflicts.length > 1 ? `既存 ${conflicts.length}件` : "既存";
     const availablePriority = findAvailablePriority(task.actionDate, task.id, [task.priority]);
+    delete conflictDialog.dataset.role;
     conflictDialog.innerHTML = `
       <div class="sheet">
         ${renderSheetHeader("優先度の入れ替え", `${formatShortDate(task.actionDate)} の ${priorityMeta[task.priority].label} には既存タスクがあります。`)}
@@ -2179,6 +2332,7 @@
         </div>
       </div>
     `);
+    markDialogFormsPristine(entityDialog);
   }
 
   async function savePendingPolicy(mode) {
@@ -2590,6 +2744,7 @@
     return [
       task.description,
       task.actionDate ? `実施: ${formatShortDate(task.actionDate)}` : "",
+      formatTaskTimeRange(task) ? `時間: ${formatTaskTimeRange(task)}` : "",
       task.dueDate ? `DL: ${formatShortDate(task.dueDate)}` : "",
       task.assignee ? `担当: ${task.assignee}` : ""
     ].filter(Boolean).join("\n") || task.title || "";
@@ -3395,6 +3550,8 @@
         assignee: task.assignee || task.owner || task["担当者"] || "",
         actionDate: toDateInputValueFromUnknown(task.actionDate || task.date || task.実施日),
         dueDate: toDateInputValueFromUnknown(task.dueDate || task.dl || task.DL || task.期限日),
+        startTime: normalizeTaskTime(task.startTime || task.startTimeText || task.start || task.開始時刻 || task.開始),
+        endTime: normalizeTaskTime(task.endTime || task.endTimeText || task.end || task.終了時刻 || task.終了),
         priority: normalizePriority(task.priority || task.優先度),
         status: task.status || task.状態 || "active",
         completedAt: task.completedAt || null,
@@ -3439,6 +3596,8 @@
         assignee: row.assignee || row.owner || row["担当者"] || "",
         actionDate: toDateInputValueFromUnknown(row.actionDate || row.実施日 || row.date),
         dueDate: toDateInputValueFromUnknown(row.dueDate || row.DL || row.期限日),
+        startTime: normalizeTaskTime(row.startTime || row.開始時刻 || row.開始),
+        endTime: normalizeTaskTime(row.endTime || row.終了時刻 || row.終了),
         priority: normalizePriority(row.priority || row.優先度),
         departmentId: matchDepartmentId(row.department || row.category || row.分類 || row.部門),
         projectId: ""
@@ -3616,6 +3775,7 @@
   function openSheet(html) {
     entityDialog.innerHTML = html;
     showDialogWithLaunch(entityDialog);
+    markDialogFormsPristine(entityDialog);
   }
 
   function showDialogWithLaunch(dialog) {
@@ -3664,6 +3824,144 @@
     `;
   }
 
+  function handleDialogCancel(event) {
+    event.preventDefault();
+    requestCloseDialog(event.target);
+  }
+
+  function requestCloseDialog(dialog) {
+    const target = dialog === conflictDialog ? conflictDialog : entityDialog;
+    if (!target.open) return;
+    if (!dialogHasUnsavedData(target)) {
+      closeDialogImmediately(target);
+      return;
+    }
+    openUnsavedCloseDialog(target);
+  }
+
+  function openUnsavedCloseDialog(dialog) {
+    if (conflictDialog.open && conflictDialog.dataset.role !== "close-confirm") {
+      const discard = window.confirm("未保存の入力があります。保存せずに閉じますか？");
+      if (discard) closeDialogImmediately(dialog);
+      return;
+    }
+    app.pendingCloseRequest = { dialogId: dialog.id || "entityDialog" };
+    conflictDialog.dataset.role = "close-confirm";
+    conflictDialog.innerHTML = `
+      <div class="sheet sheet-compact">
+        ${renderSheetHeader("未保存の入力", "閉じる前に保存するか選んでください。")}
+        <div class="choice-grid">
+          <button class="choice-button" type="button" data-action="confirm-close-save">
+            <strong>保存して閉じる</strong>
+            <span>入力内容を保存します</span>
+          </button>
+          <button class="choice-button" type="button" data-action="confirm-close-discard">
+            <strong>保存せず閉じる</strong>
+            <span>今回の入力を破棄します</span>
+          </button>
+          <button class="choice-button" type="button" data-action="confirm-close-cancel">
+            <strong>戻る</strong>
+            <span>編集を続けます</span>
+          </button>
+        </div>
+      </div>
+    `;
+    showDialogWithLaunch(conflictDialog);
+  }
+
+  async function savePendingCloseDialog() {
+    const dialog = resolvePendingCloseDialog();
+    closeCloseConfirmDialog();
+    if (!dialog?.open) return;
+    const form = dialog.querySelector("form");
+    if (form) {
+      form.requestSubmit();
+      return;
+    }
+    closeDialogImmediately(dialog);
+  }
+
+  function discardPendingCloseDialog() {
+    const dialog = resolvePendingCloseDialog();
+    closeCloseConfirmDialog();
+    if (dialog) closeDialogImmediately(dialog);
+  }
+
+  function cancelPendingCloseDialog() {
+    closeCloseConfirmDialog();
+  }
+
+  function resolvePendingCloseDialog() {
+    const id = app.pendingCloseRequest?.dialogId || "entityDialog";
+    if (id === "conflictDialog") return conflictDialog;
+    return entityDialog;
+  }
+
+  function closeCloseConfirmDialog() {
+    app.pendingCloseRequest = null;
+    if (conflictDialog.dataset.role === "close-confirm") {
+      conflictDialog.close();
+      delete conflictDialog.dataset.role;
+    }
+  }
+
+  function markDialogFormsPristine(dialog) {
+    dialog.querySelectorAll("form").forEach((form) => {
+      form.dataset.initialSnapshot = formSnapshot(form);
+    });
+  }
+
+  function dialogHasUnsavedData(dialog) {
+    const dirtyForm = [...dialog.querySelectorAll("form")].some((form) =>
+      form.dataset.initialSnapshot !== formSnapshot(form)
+    );
+    if (dirtyForm) return true;
+    if (dialog.querySelector("#memoForm")) {
+      return Boolean(
+        app.pendingRecordings.length ||
+        app.pendingRecordingTranscript.trim() ||
+        app.recordingTranscript.trim() ||
+        app.recordingInterimTranscript.trim()
+      );
+    }
+    return false;
+  }
+
+  function formSnapshot(form) {
+    const fields = [...form.elements]
+      .filter((field) => field.name || field.id)
+      .filter((field) => field.type !== "file")
+      .map((field) => {
+        const key = field.name || field.id;
+        if (field.type === "checkbox" || field.type === "radio") return [key, field.value, field.checked];
+        return [key, field.value];
+      });
+    form.querySelectorAll("[data-period-picker]").forEach((picker, index) => {
+      fields.push([
+        `period-${index}`,
+        picker.dataset.draftStart || "",
+        picker.dataset.draftEnd || "",
+        picker.dataset.savedStart || "",
+        picker.dataset.savedEnd || ""
+      ]);
+    });
+    return JSON.stringify(fields);
+  }
+
+  function closeDialogImmediately(dialog) {
+    const isCloseConfirm = dialog === conflictDialog && conflictDialog.dataset.role === "close-confirm";
+    if (dialog === entityDialog && entityDialog.open && entityDialog.querySelector("#memoForm")) {
+      stopAudioCaptureImmediately();
+      resetRecordingDraft();
+    }
+    if (dialog === conflictDialog && !isCloseConfirm) {
+      app.pendingConflict = null;
+    }
+    if (isCloseConfirm) app.pendingCloseRequest = null;
+    if (dialog.open) dialog.close();
+    if (dialog === conflictDialog) delete conflictDialog.dataset.role;
+  }
+
   function closeDialogs() {
     if (entityDialog.open && entityDialog.querySelector("#memoForm")) {
       stopAudioCaptureImmediately();
@@ -3671,6 +3969,8 @@
     }
     if (entityDialog.open) entityDialog.close();
     if (conflictDialog.open) conflictDialog.close();
+    delete conflictDialog.dataset.role;
+    app.pendingCloseRequest = null;
   }
 
   function renderPriorityOptions(current) {
@@ -3891,6 +4191,7 @@
           ${tasks.map((task) => {
             const meta = [
               task.actionDate ? `実施 ${formatShortDate(task.actionDate)}` : "",
+              formatTaskTimeRange(task),
               task.dueDate ? `DL ${formatShortDate(task.dueDate)}` : "",
               task.assignee ? `担当 ${task.assignee}` : ""
             ].filter(Boolean).join(" / ");
@@ -3934,6 +4235,7 @@
     const order = { P1: 1, P2: 2, P3: 3, SUB: 4, NONE: 5 };
     return [...tasks].sort((a, b) =>
       (order[a.priority] || 9) - (order[b.priority] || 9) ||
+      String(a.startTime || "99:99").localeCompare(String(b.startTime || "99:99")) ||
       String(a.dueDate || "9999-12-31").localeCompare(String(b.dueDate || "9999-12-31")) ||
       String(a.createdAt).localeCompare(String(b.createdAt))
     );
@@ -3943,6 +4245,7 @@
     const order = { P1: 1, P2: 2, P3: 3, SUB: 4, NONE: 5 };
     return [...tasks].sort((a, b) =>
       String(a.actionDate || "9999-12-31").localeCompare(String(b.actionDate || "9999-12-31")) ||
+      String(a.startTime || "99:99").localeCompare(String(b.startTime || "99:99")) ||
       (order[a.priority] || 9) - (order[b.priority] || 9) ||
       String(a.dueDate || "9999-12-31").localeCompare(String(b.dueDate || "9999-12-31")) ||
       String(a.createdAt).localeCompare(String(b.createdAt))
@@ -3953,6 +4256,38 @@
     return sortTasksByActionDate(tasks).sort((a, b) =>
       Number(Boolean(b.dueDate)) - Number(Boolean(a.dueDate))
     );
+  }
+
+  function normalizeMemoSort(value) {
+    return new Set(["created-old", "created-new", "updated-old", "updated-new"]).has(value)
+      ? value
+      : "updated-new";
+  }
+
+  function sortMemos(memos, sortOrder = "updated-new") {
+    const order = normalizeMemoSort(sortOrder);
+    const field = order.startsWith("created") ? "createdAt" : "updatedAt";
+    const direction = order.endsWith("old") ? 1 : -1;
+    return [...memos].sort((a, b) => {
+      const compared = String(a[field] || "").localeCompare(String(b[field] || ""));
+      if (compared) return compared * direction;
+      return String(a.title || "").localeCompare(String(b.title || ""));
+    });
+  }
+
+  function renderMemoSortControl(current) {
+    const value = normalizeMemoSort(current);
+    return `
+      <label class="compact-select-label" for="memoSort">
+        <span>並び順</span>
+        <select id="memoSort" aria-label="メモの並び順">
+          <option value="created-old"${selected(value, "created-old")}>作成日 古い順</option>
+          <option value="created-new"${selected(value, "created-new")}>作成日 新しい順</option>
+          <option value="updated-old"${selected(value, "updated-old")}>更新日 古い順</option>
+          <option value="updated-new"${selected(value, "updated-new")}>更新日 新しい順</option>
+        </select>
+      </label>
+    `;
   }
 
   function hasRecurrence(task) {
@@ -4040,6 +4375,19 @@
     return app.state.memos.filter((memo) => ids.has(memo.id) || memo.taskIds?.includes(task.id));
   }
 
+  function getTodayMemos(date = todayIso()) {
+    const todayTaskIds = new Set(app.state.tasks
+      .filter((task) => taskOccursOnDate(task, date))
+      .map((task) => task.id));
+    return app.state.memos.filter((memo) => {
+      if (localDateFromTimestamp(memo.createdAt) === date) return true;
+      if ((memo.taskIds || []).some((taskId) => todayTaskIds.has(taskId))) return true;
+      return app.state.tasks.some((task) =>
+        todayTaskIds.has(task.id) && (task.memoIds || []).includes(memo.id)
+      );
+    });
+  }
+
   function shouldShowMemos(task, linkedMemos) {
     return Boolean(linkedMemos.length);
   }
@@ -4049,11 +4397,18 @@
   }
 
   function syncMemoLinksForTask(task) {
+    const now = nowIso();
     app.state.memos.forEach((memo) => {
       const has = task.memoIds.includes(memo.id);
       const includes = memo.taskIds.includes(task.id);
-      if (has && !includes) memo.taskIds.push(task.id);
-      if (!has && includes) memo.taskIds = memo.taskIds.filter((id) => id !== task.id);
+      if (has && !includes) {
+        memo.taskIds.push(task.id);
+        memo.updatedAt = now;
+      }
+      if (!has && includes) {
+        memo.taskIds = memo.taskIds.filter((id) => id !== task.id);
+        memo.updatedAt = now;
+      }
     });
   }
 
@@ -4108,7 +4463,7 @@
     if (!filter || filter === "all") return true;
     if (filter === "today") {
       if (kind === "task") return item.actionDate === todayIso() || item.dueDate === todayIso();
-      if (kind === "memo") return false;
+      if (kind === "memo") return getTodayMemos(todayIso()).some((memo) => memo.id === item.id);
       if (kind === "policy") return isDateInPolicy(todayIso(), item);
     }
     if (filter === "no-date") return kind === "task" ? !item.actionDate : true;
@@ -4195,6 +4550,35 @@
       date.setDate(start.getDate() + index);
       return { date, inMonth: date.getMonth() === month };
     });
+  }
+
+  function normalizeTaskTime(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const match = text.normalize("NFKC").match(/^(\d{1,2}):?(\d{2})$/);
+    if (!match) return "";
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return "";
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  }
+
+  function formatTaskTimeRange(task) {
+    const start = normalizeTaskTime(task?.startTime);
+    const end = normalizeTaskTime(task?.endTime);
+    if (start && end) return `${start}-${end}`;
+    if (start) return `${start}から`;
+    if (end) return `${end}まで`;
+    return "";
+  }
+
+  function localDateFromTimestamp(value) {
+    const text = String(value || "");
+    if (!text) return "";
+    if (!text.includes("T") && isIsoDate(text.slice(0, 10))) return text.slice(0, 10);
+    const date = new Date(text);
+    if (!Number.isNaN(date.getTime())) return toDateInputValue(date);
+    return isIsoDate(text.slice(0, 10)) ? text.slice(0, 10) : "";
   }
 
   function parseMonthKey(key) {
@@ -4445,6 +4829,11 @@
     if (!isoDate) return "";
     const date = new Date(`${isoDate}T00:00:00`);
     return new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }).format(date);
+  }
+
+  function formatTimestampDate(value) {
+    const date = localDateFromTimestamp(value);
+    return date ? formatShortDate(date) : "";
   }
 
   function normalizePriority(value) {
