@@ -87,9 +87,10 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 
 ## 6. AI整理結果取り込み設計
 
-メモ AI 整理は Claris 内で AI 処理を実行せず、保存済みメモの「AI整理用にコピー」で外部 LLM 用プロンプトを作り、外部 LLM の JSON 回答を手動で貼り付けて取り込む。
+メモ AI 整理は Claris 内で AI 処理を実行せず、保存済みメモの「AI整理用にコピー」で外部 LLM 用プロンプトを作り、外部 LLM の JSON 回答を手動で貼り付けるか `.json` ファイルとして選択して取り込む。
 
-- `parseMemoAiImportJson(text)` は、純粋な JSON、JSON コードブロック、前後に説明文が混じるテキストから安全に単一 JSON オブジェクトを抽出できる場合だけ解析する。抽出が曖昧な場合は取り込まない。
+- `.json` ファイル選択時は FileReader で内容を読み込み、取り込み前にテキストエリアへ反映する。
+- `parseMemoAiImportJson(text)` は、前後の空白と BOM を除去したうえで、純粋な JSON、JSON コードブロック、前後に説明文が混じるテキストから安全に単一 JSON オブジェクトを抽出できる場合だけ解析する。抽出が曖昧な場合は取り込まない。JSON.parse 失敗時は行・列、付近の断片、スマートクォート混入などを表示する。
 - `validateMemoAiImport(data, currentMemoId)` は `clarisImportType === "memo_ai_summary"`、`version === 1`、現在開いているメモ ID と一致する `memoId`、`agendas` / `policies` / `actions` が文字列配列であることを要求する。`title` は必須条件にしない。
 - `applyMemoAiSummaryToMemo(memo, summary)` は `agendas` を `agenda`、`policies` を `decisions`、`actions` を `nextActions` へ改行区切りで反映する。
 - 反映時は `saveMemoFromForm()` を通し、通常のメモ更新と同じ `updatedAt`、`syncStatus`、`version` 更新を行う。

@@ -1529,6 +1529,10 @@
       await readImportFile(event.target);
       return;
     }
+    if (event.target.id === "memoAiImportFile") {
+      await readMemoAiImportFile(event.target);
+      return;
+    }
     if (event.target.id === "taskRecurrenceType") {
       updateRecurrenceForm(event.target.closest("form"));
       return;
@@ -1997,6 +2001,10 @@
         <div class="memo-ai-import-panel" data-memo-ai-import-panel hidden>
           <div class="field">
             <label for="memoAiImportJson">AI整理結果JSON</label>
+            <div class="file-import-row memo-ai-file-row">
+              <label class="file-import-button" for="memoAiImportFile">JSONファイルを選択</label>
+              <input id="memoAiImportFile" type="file" accept=".json,application/json" data-ignore-snapshot>
+            </div>
             <textarea id="memoAiImportJson" data-ignore-snapshot placeholder="JSON回答を貼り付け"></textarea>
           </div>
           <div class="toolbar">
@@ -3326,6 +3334,37 @@
     clearMemoAiImportStatus(form);
   }
 
+  async function readMemoAiImportFile(input) {
+    const form = input.closest("form");
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      if (!/\.json$/i.test(String(file.name || ""))) {
+        throw new Error(".jsonファイルを選択してください。");
+      }
+      const text = await readFileWithFileReader(file);
+      const textarea = form?.querySelector("#memoAiImportJson");
+      if (textarea) {
+        textarea.value = cleanMemoAiImportJsonText(text);
+        textarea.focus();
+      }
+      setMemoAiImportStatus(form, `${file.name}を読み込みました。内容を確認して取り込めます。`, false);
+    } catch (error) {
+      setMemoAiImportStatus(form, error.message || "ファイルの読み込みに失敗しました。", true);
+    } finally {
+      input.value = "";
+    }
+  }
+
+  function readFileWithFileReader(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(String(reader.result || "")));
+      reader.addEventListener("error", () => reject(reader.error || new Error("ファイルを読み込めませんでした。")));
+      reader.readAsText(file, "utf-8");
+    });
+  }
+
   async function importMemoAiSummaryFromPanel() {
     const form = document.getElementById("memoForm");
     if (!form?.dataset.id) {
@@ -3349,23 +3388,36 @@
   }
 
   function parseMemoAiImportJson(text) {
-    const source = String(text || "").trim();
-    if (!source) throw new Error("JSON形式が正しくありません");
+    const source = cleanMemoAiImportJsonText(text);
+    if (!source) throw new Error("AI整理結果JSONが空です。JSON文字列を貼り付けるか、.jsonファイルを選択してください。");
     const candidates = getMemoAiJsonCandidates(source);
+    let lastError = null;
+    let lastCandidate = source;
+    let smartQuoteError = "";
     for (const candidate of candidates) {
       try {
         return JSON.parse(candidate);
       } catch (error) {
-        // Try the next safely extracted candidate.
+        const smartQuoteIndex = findSmartQuoteIndex(candidate);
+        if (smartQuoteIndex >= 0 && !smartQuoteError) {
+          smartQuoteError = createSmartQuoteJsonError(candidate, smartQuoteIndex);
+        }
+        lastError = error;
+        lastCandidate = candidate;
       }
     }
-    throw new Error("JSON形式が正しくありません");
+    if (smartQuoteError) throw new Error(smartQuoteError);
+    throw new Error(createJsonParseErrorMessage(lastError, lastCandidate));
+  }
+
+  function cleanMemoAiImportJsonText(text) {
+    return String(text || "").replace(/^\uFEFF/, "").trim();
   }
 
   function getMemoAiJsonCandidates(source) {
     const candidates = [];
     const addCandidate = (value) => {
-      const candidate = String(value || "").trim();
+      const candidate = cleanMemoAiImportJsonText(value);
       if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
     };
     addCandidate(source);
@@ -3404,20 +3456,75 @@
     return "";
   }
 
+  function findSmartQuoteIndex(source) {
+    return String(source || "").search(/[“”‘’]/);
+  }
+
+  function createSmartQuoteJsonError(source, index) {
+    const quote = source[index];
+    return `JSON内にスマートクォート（${quote}）があります。JSONのキーと文字列は半角の " で囲んでください。${formatJsonErrorLocation(source, index)}`;
+  }
+
+  function createJsonParseErrorMessage(error, source) {
+    const detail = error?.message ? `（${error.message}）` : "";
+    const index = getJsonParseErrorIndex(error, source);
+    if (index >= 0) {
+      return `JSON形式が正しくありません。${formatJsonErrorLocation(source, index)} ${detail}`.trim();
+    }
+    return `JSON形式が正しくありません。引用符、カンマ、閉じ括弧の位置を確認してください。${getJsonSnippet(source, 0)} ${detail}`.trim();
+  }
+
+  function getJsonParseErrorIndex(error, source) {
+    const message = String(error?.message || "");
+    const positionMatch = message.match(/position\s+(\d+)/i);
+    if (positionMatch) return clampNumber(Number(positionMatch[1]), 0, Math.max(0, source.length - 1), 0);
+    const lineColumnMatch = message.match(/line\s+(\d+)\s+column\s+(\d+)/i);
+    if (!lineColumnMatch) return -1;
+    return jsonIndexFromLineColumn(source, Number(lineColumnMatch[1]), Number(lineColumnMatch[2]));
+  }
+
+  function jsonIndexFromLineColumn(source, line, column) {
+    if (!Number.isFinite(line) || !Number.isFinite(column) || line < 1 || column < 1) return -1;
+    const lines = String(source || "").split("\n");
+    if (line > lines.length) return -1;
+    const before = lines.slice(0, line - 1).reduce((total, item) => total + item.length + 1, 0);
+    return clampNumber(before + column - 1, 0, Math.max(0, source.length - 1), 0);
+  }
+
+  function formatJsonErrorLocation(source, index) {
+    const before = String(source || "").slice(0, index);
+    const line = before.split("\n").length;
+    const column = index - before.lastIndexOf("\n");
+    return `${line}行${column}列付近: ${getJsonSnippet(source, index)}`;
+  }
+
+  function getJsonSnippet(source, index) {
+    const text = String(source || "");
+    if (!text) return "内容が空です。";
+    const safeIndex = clampNumber(Number(index) || 0, 0, Math.max(0, text.length - 1), 0);
+    const start = Math.max(0, safeIndex - 30);
+    const end = Math.min(text.length, safeIndex + 50);
+    const prefix = start > 0 ? "..." : "";
+    const suffix = end < text.length ? "..." : "";
+    return `「${prefix}${text.slice(start, end).replace(/\s+/g, " ").trim()}${suffix}」`;
+  }
+
   function validateMemoAiImport(data, currentMemoId) {
     if (!data || typeof data !== "object" || Array.isArray(data)) {
-      throw new Error("AI整理結果の形式が正しくありません");
+      throw new Error("AI整理結果はJSONオブジェクトにしてください。");
     }
-    if (data.clarisImportType !== MEMO_AI_IMPORT_TYPE || data.version !== MEMO_AI_IMPORT_VERSION) {
-      throw new Error("AI整理結果の形式が正しくありません");
+    if (data.clarisImportType !== MEMO_AI_IMPORT_TYPE) {
+      throw new Error(`clarisImportType は "${MEMO_AI_IMPORT_TYPE}" にしてください。`);
+    }
+    if (data.version !== MEMO_AI_IMPORT_VERSION) {
+      throw new Error(`version は ${MEMO_AI_IMPORT_VERSION} にしてください。`);
     }
     if (String(data.memoId || "") !== String(currentMemoId || "")) {
-      throw new Error("このメモ用のAI整理結果ではありません");
+      throw new Error("memoId が現在編集中のメモと一致しません。");
     }
-    const fields = [data.agendas, data.policies, data.actions];
-    if (!fields.every((items) => Array.isArray(items) && items.every((item) => typeof item === "string"))) {
-      throw new Error("議題・方針・行動の形式が正しくありません");
-    }
+    validateMemoAiSummaryArray(data.agendas, "agendas");
+    validateMemoAiSummaryArray(data.policies, "policies");
+    validateMemoAiSummaryArray(data.actions, "actions");
     return {
       memoId: String(data.memoId),
       title: String(data.title || ""),
@@ -3425,6 +3532,11 @@
       policies: normalizeMemoAiSummaryItems(data.policies),
       actions: normalizeMemoAiSummaryItems(data.actions)
     };
+  }
+
+  function validateMemoAiSummaryArray(items, key) {
+    if (!Array.isArray(items)) throw new Error(`${key} は配列にしてください。`);
+    if (!items.every((item) => typeof item === "string")) throw new Error(`${key} の要素は文字列にしてください。`);
   }
 
   function normalizeMemoAiSummaryItems(items) {

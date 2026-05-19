@@ -74,7 +74,7 @@
 ## 7. API に関するルール
 
 - 現行 `server.mjs` は静的配信と確認 API のみとする。
-- メモ AI 整理結果取り込みは、当面サーバー API や Claris 内 AI 処理を追加せず、外部 LLM の JSON 回答を手動貼り付けして検証する導線に留める。
+- メモ AI 整理結果取り込みは、当面サーバー API や Claris 内 AI 処理を追加せず、外部 LLM の JSON 回答を手動貼り付けまたは `.json` ファイル選択で検証する導線に留める。
 - `memo_ai_summary` 取り込みでは `clarisImportType`、`version`、`memoId`、`agendas` / `policies` / `actions` の文字列配列を必ず検証し、検証失敗時は保存データを変更しない。
 - 同期 API を追加する前に `api-spec.md` を更新する。
 - 最小 API 案は `GET /api/sync/pull`、`POST /api/sync/push`、`POST /api/backup`、`GET /api/backup`、`POST /api/restore` とする。
