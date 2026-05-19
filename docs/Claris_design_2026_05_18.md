@@ -18,7 +18,7 @@ Claris は依存ライブラリを増やさない静的 PWA とする。
 
 IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主要コレクションは `tasks`、`memos`、`policies`、`departments`、`deletedItems`、`settings`、`ui` とする。
 
-互換性維持のため、内部キー `departmentId`、`agenda`、`decisions`、`nextActions`、`policies` は残す。表示ラベルはそれぞれ「分類」「論点」「方針」「行動」「運営情報」とする。
+互換性維持のため、内部キー `departmentId`、`agenda`、`decisions`、`nextActions`、`policies` は残す。表示ラベルはそれぞれ「分類」「議題」「方針」「行動」「運営情報」とする。
 
 ## 3. 下部ナビ設計
 
@@ -94,7 +94,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主
 
 - 入力元はタイトル、本文、文字起こし。
 - `settings.llmEndpoint` が設定されていれば POST する。
-- 戻り値は `title`、`agenda`、`decisions`、`nextActions` または `論点`、`方針`、`行動` を受け付ける。
+- 戻り値は `title`、`agenda`、`decisions`、`nextActions` または `議題`、`方針`、`行動` を受け付ける。
 - 通信失敗時は `organizeText()` のローカル判定へフォールバックする。
 - 設定画面では図示を使わず、連携名とエンドポイント、データ取り込み操作だけを簡潔に置く。
 

@@ -1059,6 +1059,7 @@ textarea {
 .policy-card,
 .quick-capture,
 .memo-recording-panel,
+.memo-ai-panel,
 .settings-block,
 .calendar-day-detail,
 .import-preview {
@@ -1071,6 +1072,51 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fffdf9;
+}
+
+.memo-ai-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.memo-ai-status {
+  --period-color: var(--blue);
+}
+
+.memo-ai-actions .ghost-button {
+  flex: 1 1 144px;
+}
+
+.memo-ai-import-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.memo-ai-import-panel[hidden] {
+  display: none;
+}
+
+.memo-ai-import-panel textarea {
+  min-height: 154px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.memo-ai-import-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.memo-ai-import-status.is-error {
+  color: var(--red);
+}
+
+.memo-ai-import-status.is-success {
+  color: var(--green);
 }
 
 .memo-card h3,

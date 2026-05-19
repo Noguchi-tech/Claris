@@ -73,16 +73,21 @@
 ## 5. 関連メモ仕様
 
 - タスクフォームの関連メモ欄は `renderMemoPicker()` で描画する。
-- 検索入力 `data-memo-search` はタイトル、本文、文字起こし、論点、方針、行動を対象にする。
+- 検索入力 `data-memo-search` はタイトル、本文、文字起こし、議題、方針、行動を対象にする。
 - `filterMemoPicker()` は `normalizeSearchText()` でひらがな・カタカナ差、ローマ字、主要な業務語の漢字読みを吸収する。
 - 保存時は `FormData.getAll("memoIds")` を `task.memoIds` に反映し、`syncMemoLinksForTask()` でメモ側と同期する。
 
 ## 6. メモ仕様
 
-- 表示ラベルは「論点」「方針」「行動」。
+- 表示ラベルは「議題」「方針」「行動」。
 - 内部キーは互換性のため `agenda`、`decisions`、`nextActions` を維持する。
+- 保存済みメモの AI整理連携は `createMemoAiExportPrompt(memo)`、`parseMemoAiImportJson(text)`、`validateMemoAiImport(data, currentMemoId)`、`applyMemoAiSummaryToMemo(memo, summary)` に分離する。
+- AI整理エクスポートは現在のメモ ID、タイトル、本文、文字起こし、作成日時、更新日時を含むプロンプトをクリップボードへコピーする。Claris 内では AI 処理を実行しない。
+- AI整理インポートは `clarisImportType === "memo_ai_summary"`、`version === 1`、現在のメモ ID と一致する `memoId`、文字列配列の `agendas` / `policies` / `actions` を要求する。
+- 取り込み成功時は `agendas` を `agenda`、`policies` を `decisions`、`actions` を `nextActions` へ改行区切りで保存し、`updatedAt` と同期メタ情報を通常のメモ更新と同じ経路で更新する。
+- 既存の `agenda`、`decisions`、`nextActions` のいずれかに入力がある場合は、保存前に上書き確認を表示する。
 - 録音中の文字起こしは `app.recordingTranscript`、`app.recordingInterimTranscript`、`app.pendingRecordingTranscript`、`data-recording-transcript-draft` で保持する。
-- `saveQuickMemo()` と `handleMemoSubmit()` は `appendUniqueText()` で文字起こしを重複なく保存する。
+- `saveQuickMemo()` と `handleMemoSubmit()` は `appendUniqueText()` で文字起こしを重複なく保存する。メモフォーム保存は `saveMemoFromForm()` を通す。
 
 ## 7. 運営情報仕様
 
@@ -147,7 +152,7 @@
 
 ## 13. キャッシュ仕様
 
-- Service Worker キャッシュ名は `claris-cache-v30`。
+- Service Worker キャッシュ名は `claris-cache-v33`。
 - `index.html` と `data/` は network first、その他静的アセットは cache first とする。
 
 ## 14. 小型サーバー準備仕様

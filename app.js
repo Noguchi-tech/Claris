@@ -3,7 +3,7 @@
 
   const DB_NAME = "claris-local-db";
   const DB_VERSION = 2;
-  const APP_VERSION = "2026.05.19-sync-metadata";
+  const APP_VERSION = "2026.05.19-memo-ai-import";
   const STATE_SCHEMA_VERSION = 2;
   const STORE = "app";
   const BACKUP_STORE = "backups";
@@ -38,7 +38,7 @@
     ["3次優先", "三次優先", "さんじゆうせん", "sanjiyusen", "p3"],
     ["サブタスク", "さぶたすく", "subtask", "sub"],
     ["DL", "deadline", "due", "締切", "しめきり", "納期", "のうき"],
-    ["論点", "ろんてん", "ronten", "agenda", "issue"],
+    ["議題", "ぎだい", "gidai", "agenda", "issue"],
     ["行動", "こうどう", "kodo", "action", "next action"],
     ["文字起こし", "もじおこし", "mojiokoshi", "transcript"],
     ["録音", "ろくおん", "rokuon", "recording", "audio"],
@@ -54,10 +54,13 @@
     ["その他", "そのた", "sonota", "other"]
   ];
   const memoFieldLabels = {
-    agenda: "論点",
+    agenda: "議題",
     decisions: "方針",
     nextActions: "行動"
   };
+  const MEMO_AI_IMPORT_TYPE = "memo_ai_summary";
+  const MEMO_AI_IMPORT_VERSION = 1;
+  const LEGACY_AGENDA_LABEL = "\u8ad6\u70b9";
 
   const priorityMeta = {
     P1: { label: "最優先", className: "priority-p1" },
@@ -133,6 +136,7 @@
     dialogBackTarget: null,
     pendingCloseRequest: null,
     pendingPolicySave: null,
+    pendingMemoAiImport: null,
     settingsDrag: null,
     isComposingText: false,
     toastTimer: 0,
@@ -488,6 +492,7 @@
       decisions: source.decisions || "",
       nextActions: source.nextActions || "",
       transcript: source.transcript || "",
+      aiStatus: normalizeMemoAiStatus(source.aiStatus),
       dueDate: "",
       priority: "SUB",
       departmentId: source.departmentId || "",
@@ -519,6 +524,11 @@
       createdAt: source.createdAt || now,
       ...normalizeEntityMetadata(source, { ...metadataDefaults, now })
     };
+  }
+
+  function normalizeMemoAiStatus(value) {
+    const status = String(value || "").trim();
+    return status || "";
   }
 
   function normalizePolicyType(type) {
@@ -1431,6 +1441,12 @@
     if (action === "delete-memo") await deleteMemo(id);
     if (action === "delete-policy") await deleteEntity("policies", id, "運営情報を削除しました");
     if (action === "classify-memo-form") await classifyMemoForm();
+    if (action === "copy-memo-ai-prompt") await copyMemoAiPrompt();
+    if (action === "toggle-memo-ai-import") toggleMemoAiImportPanel();
+    if (action === "hide-memo-ai-import") hideMemoAiImportPanel();
+    if (action === "import-memo-ai-summary") await importMemoAiSummaryFromPanel();
+    if (action === "confirm-memo-ai-overwrite") await confirmMemoAiOverwrite();
+    if (action === "cancel-memo-ai-overwrite") cancelMemoAiOverwrite();
     if (action === "memo-to-task") openTaskFromMemo(id);
     if (action === "restore-deleted-item") await restoreDeletedItem(id);
     if (action === "purge-deleted-item") await purgeDeletedItem(id);
@@ -1870,6 +1886,7 @@
       decisions: existing?.decisions || defaults.decisions || "",
       nextActions: existing?.nextActions || defaults.nextActions || "",
       transcript: existing?.transcript || defaults.transcript || "",
+      aiStatus: existing?.aiStatus || defaults.aiStatus || "",
       departmentId: existing?.departmentId || defaults.departmentId || "",
       taskIds: existing?.taskIds || defaults.taskIds || [],
       recordings: existing?.recordings || []
@@ -1877,7 +1894,7 @@
     resetRecordingDraft();
     openSheet(`
       <div class="sheet">
-        ${renderSheetHeader(existing ? "メモ編集" : "メモ追加", "走り書きから始めて、後で論点・方針・行動へ整えられます。")}
+        ${renderSheetHeader(existing ? "メモ編集" : "メモ追加", "走り書きから始めて、後で議題・方針・行動へ整えられます。")}
         <form id="memoForm" class="form-grid" data-id="${escapeAttr(value.id)}">
           <div class="field">
             <label for="memoTitle">タイトル</label>
@@ -1903,6 +1920,7 @@
             <button class="ghost-button compact" type="button" data-action="classify-memo-form">自動判定</button>
             <span class="classify-status" data-classify-status></span>
           </div>
+          ${existing ? renderMemoAiTools(value) : ""}
           <div class="field-inline">
             <div class="field">
               <label for="memoAgenda">${memoFieldLabels.agenda}</label>
@@ -1949,6 +1967,32 @@
     updateTranscriptPreview("");
     updateRecordingButtons();
     markDialogFormsPristine(entityDialog);
+  }
+
+  function renderMemoAiTools(memo) {
+    return `
+      <section class="memo-ai-panel">
+        <div class="section-head">
+          <h2 class="section-title">AI整理</h2>
+          ${memo.aiStatus === "completed" ? `<span class="status-pill memo-ai-status">取込済み</span>` : ""}
+        </div>
+        <div class="toolbar memo-ai-actions">
+          <button class="ghost-button compact" type="button" data-action="copy-memo-ai-prompt">AI整理用にコピー</button>
+          <button class="ghost-button compact" type="button" data-action="toggle-memo-ai-import">AI整理結果を取り込む</button>
+        </div>
+        <div class="memo-ai-import-panel" data-memo-ai-import-panel hidden>
+          <div class="field">
+            <label for="memoAiImportJson">AI整理結果JSON</label>
+            <textarea id="memoAiImportJson" data-ignore-snapshot placeholder="JSON回答を貼り付け"></textarea>
+          </div>
+          <div class="toolbar">
+            <button class="solid-button compact" type="button" data-action="import-memo-ai-summary">取り込む</button>
+            <button class="text-button compact" type="button" data-action="hide-memo-ai-import">キャンセル</button>
+            <span class="memo-ai-import-status" data-memo-ai-import-status aria-live="polite"></span>
+          </div>
+        </div>
+      </section>
+    `;
   }
 
   function openPolicyForm(policy = null, defaults = {}, options = {}) {
@@ -2665,18 +2709,31 @@
 
   async function handleMemoSubmit(form) {
     await ensureRecordingStopped();
+    await saveMemoFromForm(form, {
+      includeRecordingDrafts: true,
+      closeAfterSave: true,
+      toastMessage: "メモを保存しました。"
+    });
+  }
+
+  function buildMemoDraftFromForm(form, options = {}) {
     const data = new FormData(form);
+    const changedAt = options.changedAt || nowIso();
     const id = form.dataset.id || uid("memo");
     const existing = findById(app.state.memos, id);
     const body = String(data.get("body") || "").trim();
     const transcriptDraft = form.querySelector("[data-recording-transcript-draft]")?.value || "";
-    const transcript = appendUniqueText(
-      appendUniqueText(String(data.get("transcript") || "").trim(), app.pendingRecordingTranscript.trim()),
-      transcriptDraft
-    ).trim();
-    const recordings = [...(existing?.recordings || []), ...app.pendingRecordings];
-    const now = nowIso();
-    const memo = markEntityChanged(normalizeMemo({
+    const baseTranscript = String(data.get("transcript") || "").trim();
+    const transcript = options.includeRecordingDrafts
+      ? appendUniqueText(
+        appendUniqueText(baseTranscript, app.pendingRecordingTranscript.trim()),
+        transcriptDraft
+      ).trim()
+      : baseTranscript;
+    const recordings = options.includeRecordingDrafts
+      ? [...(existing?.recordings || []), ...app.pendingRecordings]
+      : [...(existing?.recordings || [])];
+    return {
       ...existing,
       id,
       title: String(data.get("title") || "").trim() || firstLine(body) || "メモ",
@@ -2685,21 +2742,40 @@
       decisions: String(data.get("decisions") || "").trim(),
       nextActions: String(data.get("nextActions") || "").trim(),
       transcript,
+      aiStatus: existing?.aiStatus || "",
       dueDate: "",
       priority: "SUB",
       departmentId: normalizeDepartmentFormValue(data.get("departmentId")),
       projectId: "",
       taskIds: data.getAll("taskIds").map(String),
       recordings,
-      createdAt: existing?.createdAt || now,
-      updatedAt: now
-    }), existing, now);
+      createdAt: existing?.createdAt || changedAt,
+      updatedAt: existing?.updatedAt || changedAt
+    };
+  }
+
+  async function saveMemoFromForm(form, options = {}) {
+    const changedAt = options.changedAt || nowIso();
+    const draft = {
+      ...buildMemoDraftFromForm(form, { ...options, changedAt }),
+      ...(options.overrides || {}),
+      updatedAt: changedAt
+    };
+    const existing = findById(app.state.memos, draft.id);
+    const memo = markEntityChanged(normalizeMemo(draft), existing, changedAt);
     upsertById(app.state.memos, memo);
     syncTaskLinksForMemo(memo);
     await saveState();
-    closeDialogs();
-    render();
-    showToast("メモを保存しました。");
+    if (options.closeAfterSave === false) {
+      form.dataset.id = memo.id;
+      markDialogFormsPristine(entityDialog);
+      render();
+    } else {
+      closeDialogs();
+      render();
+    }
+    if (options.toastMessage !== false) showToast(options.toastMessage || "メモを保存しました。");
+    return memo;
   }
 
   async function handlePolicySubmit(form) {
@@ -3082,7 +3158,7 @@
       form.elements.decisions.value = organized.decisions;
       form.elements.nextActions.value = organized.nextActions;
       if (status) status.textContent = "反映済み";
-      showToast("タイトル、本文、文字起こしから論点・方針・行動へ判定しました。");
+      showToast("タイトル、本文、文字起こしから議題・方針・行動へ判定しました。");
     } finally {
       if (button) button.disabled = false;
     }
@@ -3122,10 +3198,266 @@
     const result = data.result && typeof data.result === "object" ? data.result : data;
     return {
       title: String(result.title || firstLine(text) || "メモ"),
-      agenda: String(result.agenda || result.issues || result["論点"] || ""),
+      agenda: String(result.agenda || result.issues || result["議題"] || result[LEGACY_AGENDA_LABEL] || ""),
       decisions: String(result.decisions || result.policy || result["方針"] || ""),
       nextActions: String(result.nextActions || result.actions || result["行動"] || "")
     };
+  }
+
+  async function copyMemoAiPrompt() {
+    const form = document.getElementById("memoForm");
+    if (!form?.dataset.id) {
+      showToast("保存済みメモで利用できます。");
+      return;
+    }
+    const memo = buildMemoDraftFromForm(form, { includeRecordingDrafts: true });
+    try {
+      await copyTextToClipboard(createMemoAiExportPrompt(memo));
+      showToast("AI整理用プロンプトをコピーしました。");
+    } catch (error) {
+      showToast("クリップボードへコピーできませんでした。");
+    }
+  }
+
+  function createMemoAiExportPrompt(memo) {
+    const responseSchema = {
+      clarisImportType: MEMO_AI_IMPORT_TYPE,
+      version: MEMO_AI_IMPORT_VERSION,
+      memoId: "<元メモID>",
+      title: "<元タイトル>",
+      agendas: [
+        "議題1",
+        "議題2"
+      ],
+      policies: [
+        "方針1",
+        "方針2"
+      ],
+      actions: [
+        "行動1",
+        "行動2"
+      ]
+    };
+    const sourceMemo = {
+      memoId: memo.id || "",
+      title: memo.title || "",
+      body: memo.body || "",
+      transcript: memo.transcript || "",
+      createdAt: memo.createdAt || "",
+      updatedAt: memo.updatedAt || ""
+    };
+    return [
+      "以下のメモを「議題・方針・行動」に整理してください。",
+      "",
+      "出力は、必ず次のJSON形式のみで返してください。",
+      "説明文、補足文、Markdown、コードブロックは不要です。",
+      "",
+      JSON.stringify(responseSchema, null, 2),
+      "",
+      "分類ルール：",
+      "- 議題：話し合うこと、確認すべきこと、問題として扱うこと",
+      "- 方針：決まった方向性、判断、考え方",
+      "- 行動：次にやること、担当、期限、具体的な作業",
+      "- 本文と文字起こしの両方を対象にする",
+      "- 文字起こしにしか含まれない内容も必要に応じて整理する",
+      "- 不明な項目は空配列 [] にする",
+      "- 内容を勝手に作らない",
+      "- 元の意味を変えない",
+      "- できるだけ短く、実務で使いやすい表現にする",
+      "",
+      "元メモ：",
+      JSON.stringify(sourceMemo, null, 2)
+    ].join("\n");
+  }
+
+  async function copyTextToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch (error) {
+        // Fall through to the selection-based copy path for older PWA contexts.
+      }
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      if (!document.execCommand("copy")) throw new Error("copy failed");
+    } finally {
+      textarea.remove();
+    }
+  }
+
+  function toggleMemoAiImportPanel() {
+    const form = document.getElementById("memoForm");
+    const panel = form?.querySelector("[data-memo-ai-import-panel]");
+    if (!panel) return;
+    panel.hidden = !panel.hidden;
+    clearMemoAiImportStatus(form);
+    if (!panel.hidden) panel.querySelector("textarea")?.focus();
+  }
+
+  function hideMemoAiImportPanel() {
+    const form = document.getElementById("memoForm");
+    const panel = form?.querySelector("[data-memo-ai-import-panel]");
+    if (!panel) return;
+    panel.hidden = true;
+    clearMemoAiImportStatus(form);
+  }
+
+  async function importMemoAiSummaryFromPanel() {
+    const form = document.getElementById("memoForm");
+    if (!form?.dataset.id) {
+      showToast("保存済みメモで利用できます。");
+      return;
+    }
+    const text = form.querySelector("#memoAiImportJson")?.value || "";
+    let summary;
+    try {
+      summary = validateMemoAiImport(parseMemoAiImportJson(text), form.dataset.id);
+    } catch (error) {
+      setMemoAiImportStatus(form, error.message || "JSON形式が正しくありません", true);
+      return;
+    }
+    if (memoAiSummaryHasExistingContent(form)) {
+      app.pendingMemoAiImport = { memoId: form.dataset.id, summary };
+      openMemoAiOverwriteConfirm();
+      return;
+    }
+    await applyMemoAiSummaryToCurrentMemo(summary);
+  }
+
+  function parseMemoAiImportJson(text) {
+    try {
+      return JSON.parse(String(text || "").trim());
+    } catch (error) {
+      throw new Error("JSON形式が正しくありません");
+    }
+  }
+
+  function validateMemoAiImport(data, currentMemoId) {
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error("AI整理結果の形式が正しくありません");
+    }
+    if (data.clarisImportType !== MEMO_AI_IMPORT_TYPE || data.version !== MEMO_AI_IMPORT_VERSION) {
+      throw new Error("AI整理結果の形式が正しくありません");
+    }
+    if (String(data.memoId || "") !== String(currentMemoId || "")) {
+      throw new Error("このメモ用のAI整理結果ではありません");
+    }
+    const agendas = Array.isArray(data.agendas) ? data.agendas : data.topics;
+    const fields = [agendas, data.policies, data.actions];
+    if (!fields.every((items) => Array.isArray(items) && items.every((item) => typeof item === "string"))) {
+      throw new Error("議題・方針・行動の形式が正しくありません");
+    }
+    return {
+      memoId: String(data.memoId),
+      title: String(data.title || ""),
+      agendas: normalizeMemoAiSummaryItems(agendas),
+      policies: normalizeMemoAiSummaryItems(data.policies),
+      actions: normalizeMemoAiSummaryItems(data.actions)
+    };
+  }
+
+  function normalizeMemoAiSummaryItems(items) {
+    return items.map((item) => String(item).replace(/\s+/g, " ").trim()).filter(Boolean);
+  }
+
+  function memoAiSummaryHasExistingContent(form) {
+    return ["agenda", "decisions", "nextActions"].some((name) =>
+      String(form.elements[name]?.value || "").trim()
+    );
+  }
+
+  function openMemoAiOverwriteConfirm() {
+    conflictDialog.dataset.role = "memo-ai-overwrite";
+    conflictDialog.innerHTML = `
+      <div class="sheet sheet-compact">
+        ${renderSheetHeader("上書き確認", "既存の「議題・方針・行動」を上書きします。よろしいですか？")}
+        <div class="choice-grid">
+          <button class="choice-button" type="button" data-action="confirm-memo-ai-overwrite">
+            <strong>上書きする</strong>
+            <span>AI整理結果を反映します</span>
+          </button>
+          <button class="choice-button choice-button-return" type="button" data-action="cancel-memo-ai-overwrite">
+            <strong>キャンセル</strong>
+            <span>現在の内容を残します</span>
+          </button>
+        </div>
+      </div>
+    `;
+    showDialogWithLaunch(conflictDialog);
+  }
+
+  async function confirmMemoAiOverwrite() {
+    const pending = app.pendingMemoAiImport;
+    closeMemoAiOverwriteConfirm();
+    if (!pending) return;
+    await applyMemoAiSummaryToCurrentMemo(pending.summary);
+  }
+
+  function cancelMemoAiOverwrite() {
+    closeMemoAiOverwriteConfirm();
+    const form = document.getElementById("memoForm");
+    if (form) setMemoAiImportStatus(form, "取り込みをキャンセルしました。", false);
+  }
+
+  function closeMemoAiOverwriteConfirm() {
+    app.pendingMemoAiImport = null;
+    if (conflictDialog.open && conflictDialog.dataset.role === "memo-ai-overwrite") conflictDialog.close();
+    if (conflictDialog.dataset.role === "memo-ai-overwrite") delete conflictDialog.dataset.role;
+  }
+
+  async function applyMemoAiSummaryToCurrentMemo(summary) {
+    const form = document.getElementById("memoForm");
+    if (!form || String(form.dataset.id || "") !== String(summary.memoId || "")) {
+      showToast("このメモ用のAI整理結果ではありません。");
+      return;
+    }
+    const draft = buildMemoDraftFromForm(form, { includeRecordingDrafts: false });
+    const applied = applyMemoAiSummaryToMemo(draft, summary);
+    form.elements.agenda.value = applied.agenda;
+    form.elements.decisions.value = applied.decisions;
+    form.elements.nextActions.value = applied.nextActions;
+    await saveMemoFromForm(form, {
+      includeRecordingDrafts: false,
+      closeAfterSave: false,
+      overrides: {
+        agenda: applied.agenda,
+        decisions: applied.decisions,
+        nextActions: applied.nextActions,
+        aiStatus: applied.aiStatus
+      },
+      toastMessage: "AI整理結果を取り込みました。"
+    });
+    setMemoAiImportStatus(form, "取り込みました。", false);
+  }
+
+  function applyMemoAiSummaryToMemo(memo, summary) {
+    return {
+      ...memo,
+      agenda: summary.agendas.join("\n"),
+      decisions: summary.policies.join("\n"),
+      nextActions: summary.actions.join("\n"),
+      aiStatus: "completed"
+    };
+  }
+
+  function setMemoAiImportStatus(form, message, isError) {
+    const status = form?.querySelector("[data-memo-ai-import-status]");
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle("is-error", Boolean(isError));
+    status.classList.toggle("is-success", !isError && Boolean(message));
+  }
+
+  function clearMemoAiImportStatus(form) {
+    setMemoAiImportStatus(form, "", false);
   }
 
   function openTaskFromMemo(id) {
@@ -4021,7 +4353,7 @@
       memos: (source.memos || source.notes || []).map((memo) => ({
         title: memo.title || firstLine(memo.body || memo.content) || "メモ",
         body: memo.body || memo.content || "",
-        agenda: memo.agenda || memo.論点 || memo.議題 || "",
+        agenda: memo.agenda || memo.議題 || memo[LEGACY_AGENDA_LABEL] || "",
         decisions: memo.decisions || memo.方針 || memo.決定 || "",
         nextActions: memo.nextActions || memo.行動 || memo.次 || "",
         transcript: memo.transcript || memo.文字起こし || "",
@@ -4405,6 +4737,7 @@
     const fields = [...form.elements]
       .filter((field) => field.name || field.id)
       .filter((field) => field.type !== "file")
+      .filter((field) => !field.matches("[data-ignore-snapshot]"))
       .map((field) => {
         const key = field.name || field.id;
         if (field.type === "checkbox" || field.type === "radio") return [key, field.value, field.checked];
@@ -4424,6 +4757,7 @@
 
   function closeDialogImmediately(dialog) {
     const isCloseConfirm = dialog === conflictDialog && conflictDialog.dataset.role === "close-confirm";
+    const isMemoAiOverwrite = dialog === conflictDialog && conflictDialog.dataset.role === "memo-ai-overwrite";
     if (dialog === entityDialog && entityDialog.open && entityDialog.querySelector("#memoForm")) {
       stopAudioCaptureImmediately();
       resetRecordingDraft();
@@ -4432,6 +4766,7 @@
       app.pendingConflict = null;
     }
     if (isCloseConfirm) app.pendingCloseRequest = null;
+    if (isMemoAiOverwrite) app.pendingMemoAiImport = null;
     if (dialog.open) dialog.close();
     if (dialog === conflictDialog) delete conflictDialog.dataset.role;
     if (dialog === entityDialog) app.dialogBackTarget = null;
@@ -4446,6 +4781,7 @@
     if (conflictDialog.open) conflictDialog.close();
     delete conflictDialog.dataset.role;
     app.pendingCloseRequest = null;
+    app.pendingMemoAiImport = null;
     app.dialogBackTarget = null;
   }
 
@@ -4939,7 +5275,7 @@
     lines.forEach((line) => {
       if (/(決定|決ま|することに|方針|で進める)/.test(line)) decisions.push(line);
       else if (/(→|対応|確認|依頼|作成|送る|提出|DL|まで|次回|やる)/i.test(line)) nextActions.push(line);
-      else if (/(論点|課題|懸念|確認したい|なぜ|どうする|検討)/.test(line)) agenda.push(line);
+      else if (new RegExp(`(議題|${LEGACY_AGENDA_LABEL}|課題|懸念|確認したい|なぜ|どうする|検討)`).test(line)) agenda.push(line);
       else agenda.push(line);
     });
     return {
