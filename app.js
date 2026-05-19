@@ -123,11 +123,13 @@
     recognitionStopPromise: null,
     recognitionStopResolve: null,
     dialogOrigin: null,
+    dialogBackTarget: null,
     pendingCloseRequest: null,
     pendingPolicySave: null,
     settingsDrag: null,
     isComposingText: false,
-    toastTimer: 0
+    toastTimer: 0,
+    periodToastTimer: 0
   };
 
   const entityDialog = document.getElementById("entityDialog");
@@ -209,6 +211,8 @@
 
   function applyStartupUiPolicy() {
     app.state.ui.activeTab = "today";
+    app.state.ui.todayMetricsOpen = false;
+    app.state.ui.todayMetricsUserSet = false;
     if (!app.state.ui.selectedDate) app.state.ui.selectedDate = todayIso();
     if (!app.state.ui.calendarMonth) app.state.ui.calendarMonth = monthKey(new Date());
   }
@@ -235,7 +239,8 @@
       },
       ui: {
         activeTab: "today",
-        todayMetricsOpen: true,
+        todayMetricsOpen: false,
+        todayMetricsUserSet: false,
         taskFilter: "all",
         entryKind: "all",
         entryFilter: "all",
@@ -278,6 +283,7 @@
     merged.memos = merged.memos.map(normalizeMemo);
     merged.policies = merged.policies.map(normalizePolicy);
     merged.settings.policyTypes = normalizePolicyTypes(merged.settings.policyTypes);
+    if (!merged.ui.todayMetricsUserSet) merged.ui.todayMetricsOpen = false;
     delete merged.settings["color" + "VisionMode"];
     merged.deletedItems = merged.deletedItems.map(normalizeDeletedItem);
     return merged;
@@ -497,13 +503,13 @@
     const completedToday = sortTasks(app.state.tasks.filter((task) => isTaskCompletedForDate(task, date)));
     const relatedPolicies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
     const todayMemos = getTodayMemos(date);
-    const metricsOpen = app.state.ui.todayMetricsOpen !== false;
+    const metricsOpen = app.state.ui.todayMetricsOpen === true;
 
     view.innerHTML = `
-      <section class="today-metrics-panel" aria-label="今日の数">
+      <section class="today-metrics-panel" aria-label="今日">
         <button class="collapse-toggle today-metrics-toggle" type="button" data-action="toggle-today-metrics" aria-expanded="${metricsOpen ? "true" : "false"}">
           <span class="collapse-mark">${metricsOpen ? "－" : "＋"}</span>
-          <span class="section-title">今日の数</span>
+          <span class="section-title">今日</span>
           <span class="section-count">${todayTasks.length + overdue.length + todayMemos.length + relatedPolicies.length}件</span>
         </button>
         <div class="dashboard-grid ${metricsOpen ? "" : "is-collapsed"}" aria-label="実施、DL超過、メモ、運営">
@@ -825,36 +831,127 @@
 
   function renderCalendarPeriodSummary(date) {
     const periods = getCalendarPeriodsForDate(date, "all");
+    const groups = groupCalendarPeriodsByType(periods);
+    const mode = periodSummaryMode(groups);
     return `
       <section class="calendar-period-summary" aria-label="選択日の${OPERATIONS_LABEL}">
         <span class="period-summary-label">${OPERATIONS_LABEL}</span>
-        <div class="period-summary-list">
-          ${periods.length ? periods.map((period) => {
-            const classes = [
-              "period-summary-item",
-              `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
-            ].join(" ");
-            const action = "edit-policy";
-            const summary = compactPeriodSummary(period, periods.length);
-            return `
-              <button class="${classes}" type="button" data-action="${action}" data-id="${escapeAttr(period.id)}" title="${escapeAttr(`${period.type || "方針"}: ${summary}`)}">
-                <strong>${escapeHtml(period.type || "方針")}</strong>
-                <span>${escapeHtml(summary)}</span>
-              </button>
-            `;
-          }).join("") : `<span class="period-summary-empty">運営情報なし</span>`}
+        <div class="period-summary-list ${mode ? `is-${mode}` : ""}">
+          ${renderCalendarPeriodSummaryItems(periods, groups, mode)}
         </div>
       </section>
     `;
   }
 
+  function renderCalendarPeriodSummaryItems(periods, groups, mode) {
+    if (!periods.length) return `<span class="period-summary-empty">運営情報なし</span>`;
+    if (mode === "condensed") {
+      return groups.map((group) => {
+        const classes = [
+          "period-summary-item",
+          "period-summary-chip",
+          `period-line-${stableIndex(group.type, PERIOD_LINE_CLASS_COUNT)}`
+        ].join(" ");
+        const period = group.items[0];
+        const title = group.items.map(readablePeriodText).join(" / ");
+        const label = summaryPeriodTypeLabel(group.type);
+        return `
+          <button class="${classes}" type="button" data-action="edit-policy" data-id="${escapeAttr(period.id)}" title="${escapeAttr(`${group.type}: ${title}`)}">
+            <strong>${escapeHtml(label)}</strong>
+            <span>${escapeHtml(`${label}${group.items.length}`)}</span>
+          </button>
+        `;
+      }).join("");
+    }
+    if (mode === "stacked") {
+      return groups.map((group) => {
+        const period = group.items[0];
+        const classes = [
+          "period-summary-item",
+          `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
+        ].join(" ");
+        const summary = groupPeriodSummary(group);
+        return `
+          <button class="${classes}" type="button" data-action="edit-policy" data-id="${escapeAttr(period.id)}" title="${escapeAttr(`${group.type}: ${summary}`)}">
+            <strong>${escapeHtml(group.type || "方針")}</strong>
+            <span>${escapeHtml(summary)}</span>
+          </button>
+        `;
+      }).join("");
+    }
+    return periods.map((period) => {
+      const classes = [
+        "period-summary-item",
+        `period-line-${stableIndex(period.id, PERIOD_LINE_CLASS_COUNT)}`
+      ].join(" ");
+      const summary = compactPeriodSummary(period, periods.length);
+      return `
+        <button class="${classes}" type="button" data-action="edit-policy" data-id="${escapeAttr(period.id)}" title="${escapeAttr(`${period.type || "方針"}: ${summary}`)}">
+          <strong>${escapeHtml(period.type || "方針")}</strong>
+          <span>${escapeHtml(summary)}</span>
+        </button>
+      `;
+    }).join("");
+  }
+
+  function groupCalendarPeriodsByType(periods) {
+    const groups = new Map();
+    periods.forEach((period) => {
+      const type = normalizePolicyType(period.type || "方針");
+      if (!groups.has(type)) groups.set(type, { type, items: [] });
+      groups.get(type).items.push(period);
+    });
+    return [...groups.values()].sort((a, b) =>
+      String(a.items[0]?.start || "").localeCompare(String(b.items[0]?.start || "")) ||
+      String(a.type).localeCompare(String(b.type))
+    );
+  }
+
+  function periodSummaryMode(groups) {
+    if (groups.length >= 3) return "condensed";
+    if (groups.length === 2) return "stacked";
+    return "";
+  }
+
   function compactPeriodSummary(period, totalCount = 1) {
-    const titleLimit = totalCount > 4 ? 10 : 16;
-    const detailLimit = totalCount > 4 ? 18 : 28;
-    const title = truncate(period.title || period.type || "方針", titleLimit);
-    const detail = truncate(period.summary || "", detailLimit);
-    if (!detail || detail === title) return title;
+    const text = readablePeriodText(period);
+    const limit = totalCount > 4 ? 28 : totalCount > 2 ? 42 : 72;
+    return truncate(text, limit);
+  }
+
+  function groupPeriodSummary(group) {
+    const summaries = group.items.map(readablePeriodText).filter(Boolean);
+    if (!summaries.length) return group.type || "方針";
+    return truncate(summaries.join(" / "), 72);
+  }
+
+  function summaryPeriodTypeLabel(type) {
+    const text = String(type || "方針").trim();
+    if (/半期/.test(text)) return "半期";
+    if (/イベント/.test(text)) return "イベント";
+    return truncate(text, 4);
+  }
+
+  function readablePeriodText(period) {
+    const title = singleLine(period.title || period.type || "方針");
+    const detail = singleLine(period.summary || "");
+    if (!detail) return title;
+    if (!title || isRedundantPeriodText(title, detail)) return detail;
     return `${title}: ${detail}`;
+  }
+
+  function singleLine(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function isRedundantPeriodText(left, right) {
+    const compactLeft = normalizeComparableText(left);
+    const compactRight = normalizeComparableText(right);
+    return compactLeft && compactRight && (compactLeft === compactRight || compactRight.includes(compactLeft));
+  }
+
+  function normalizeComparableText(value) {
+    return String(value || "").normalize("NFKC").replace(/\s+/g, "").trim();
   }
 
   function renderCalendarPolicyFocus(date, filter) {
@@ -1348,9 +1445,10 @@
   }
 
   function openKind(kind) {
-    if (kind === "task") openTaskForm(null, defaultTaskForCurrentContext());
-    if (kind === "memo") openMemoForm();
-    if (kind === "policy") openPolicyForm();
+    const backTarget = { type: "add-choice", active: kind || "task" };
+    if (kind === "task") openTaskForm(null, defaultTaskForCurrentContext(), { backTarget });
+    if (kind === "memo") openMemoForm(null, {}, { backTarget });
+    if (kind === "policy") openPolicyForm(null, {}, { backTarget });
     if (kind === "department") openDepartmentForm();
   }
 
@@ -1361,7 +1459,8 @@
   }
 
   async function toggleTodayMetrics() {
-    app.state.ui.todayMetricsOpen = app.state.ui.todayMetricsOpen === false;
+    app.state.ui.todayMetricsOpen = app.state.ui.todayMetricsOpen !== true;
+    app.state.ui.todayMetricsUserSet = true;
     await saveState();
     renderTodayView();
   }
@@ -1537,7 +1636,7 @@
     return { priority: "SUB" };
   }
 
-  function openTaskForm(task = null, defaults = {}) {
+  function openTaskForm(task = null, defaults = {}, options = {}) {
     const existing = task ? normalizeTask(task) : null;
     const value = {
       id: existing?.id || "",
@@ -1602,7 +1701,7 @@
           </div>
         </form>
       </div>
-    `);
+    `, options);
     initializeTaskDateInputs(value);
     updateRecurrenceForm(document.getElementById("taskForm"));
     updateTaskPriorityPreview(document.getElementById("taskForm"));
@@ -1620,7 +1719,7 @@
     input.value = date || "";
   }
 
-  function openMemoForm(memo = null, defaults = {}) {
+  function openMemoForm(memo = null, defaults = {}, options = {}) {
     const existing = memo ? normalizeMemo(memo) : null;
     const value = {
       id: existing?.id || "",
@@ -1705,13 +1804,13 @@
           </div>
         </form>
       </div>
-    `);
+    `, options);
     updateTranscriptPreview("");
     updateRecordingButtons();
     markDialogFormsPristine(entityDialog);
   }
 
-  function openPolicyForm(policy = null, defaults = {}) {
+  function openPolicyForm(policy = null, defaults = {}, options = {}) {
     const existing = policy ? normalizePolicy(policy) : null;
     const value = {
       id: existing?.id || "",
@@ -1756,7 +1855,7 @@
           </div>
         </form>
       </div>
-    `);
+    `, options);
   }
 
   function openDepartmentForm() {
@@ -3929,7 +4028,8 @@
     URL.revokeObjectURL(url);
   }
 
-  function openSheet(html) {
+  function openSheet(html, options = {}) {
+    app.dialogBackTarget = options.backTarget || null;
     entityDialog.innerHTML = html;
     showDialogWithLaunch(entityDialog);
     markDialogFormsPristine(entityDialog);
@@ -3990,6 +4090,7 @@
     const target = dialog === conflictDialog ? conflictDialog : entityDialog;
     if (!target.open) return;
     if (!dialogHasUnsavedData(target)) {
+      if (returnToPreviousDialog(target)) return;
       closeDialogImmediately(target);
       return;
     }
@@ -4050,7 +4151,7 @@
   function discardPendingCloseDialog() {
     const dialog = resolvePendingCloseDialog();
     closeCloseConfirmDialog();
-    if (dialog) closeDialogImmediately(dialog);
+    if (dialog && !returnToPreviousDialog(dialog)) closeDialogImmediately(dialog);
   }
 
   function cancelPendingCloseDialog() {
@@ -4126,6 +4227,7 @@
     if (isCloseConfirm) app.pendingCloseRequest = null;
     if (dialog.open) dialog.close();
     if (dialog === conflictDialog) delete conflictDialog.dataset.role;
+    if (dialog === entityDialog) app.dialogBackTarget = null;
   }
 
   function closeDialogs() {
@@ -4137,6 +4239,22 @@
     if (conflictDialog.open) conflictDialog.close();
     delete conflictDialog.dataset.role;
     app.pendingCloseRequest = null;
+    app.dialogBackTarget = null;
+  }
+
+  function returnToPreviousDialog(dialog) {
+    if (dialog !== entityDialog || !app.dialogBackTarget) return false;
+    const target = app.dialogBackTarget;
+    if (entityDialog.querySelector("#memoForm")) {
+      stopAudioCaptureImmediately();
+      resetRecordingDraft();
+    }
+    if (target.type === "add-choice") {
+      openAddChoice(target.active || "task");
+      return true;
+    }
+    app.dialogBackTarget = null;
+    return false;
   }
 
   function renderPriorityOptions(current) {
@@ -4158,6 +4276,7 @@
         <label>期間</label>
         <input id="periodStart" name="periodStart" type="hidden" value="${escapeAttr(start)}">
         <input id="periodEnd" name="periodEnd" type="hidden" value="${escapeAttr(end)}">
+        <div class="period-save-toast" data-period-save-toast role="status" aria-live="polite"></div>
         <div class="period-picker" data-period-calendar>
           ${renderPolicyPeriodCalendar(month, start, end)}
         </div>
@@ -4255,7 +4374,18 @@
       status?.classList.remove("is-confirmed");
       saveButton?.classList.remove("is-confirmed");
     }, 900);
-    showToast("期間を保存しました。");
+    showPeriodSaveToast(picker);
+  }
+
+  function showPeriodSaveToast(picker) {
+    const notice = picker.querySelector("[data-period-save-toast]");
+    if (!notice) return;
+    window.clearTimeout(app.periodToastTimer);
+    notice.textContent = "期間を保存しました";
+    notice.classList.add("is-visible");
+    app.periodToastTimer = window.setTimeout(() => {
+      notice.classList.remove("is-visible");
+    }, 1800);
   }
 
   function clearPolicyPeriod(button) {

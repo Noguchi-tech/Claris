@@ -66,6 +66,10 @@ button:active:not(:disabled) {
   transform: scale(0.975);
 }
 
+button:focus-visible {
+  outline: none;
+}
+
 .app-shell {
   width: min(100%, var(--phone-max));
   min-height: 100vh;
@@ -217,6 +221,11 @@ input[type="checkbox"] {
 .view {
   display: grid;
   gap: 14px;
+}
+
+.view:focus,
+.view:focus-visible {
+  outline: none;
 }
 
 .section {
@@ -380,8 +389,7 @@ input[type="checkbox"] {
 .policy-card:focus-visible,
 .policy-focus-card:focus-visible,
 .period-summary-item:focus-visible {
-  outline: 2px solid var(--calendar-selected);
-  outline-offset: 3px;
+  outline: none;
 }
 
 .task-card {
@@ -451,8 +459,7 @@ input[type="checkbox"] {
 }
 
 .title-button:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 3px;
+  outline: none;
 }
 
 .task-card.completed .task-title {
@@ -689,6 +696,28 @@ input[type="date"] {
 
 .policy-period-field {
   align-self: start;
+}
+
+.period-save-toast {
+  min-height: 0;
+  overflow: hidden;
+  transform: translateY(6px);
+  opacity: 0;
+  color: #fff;
+  background: rgba(23, 33, 31, 0.94);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+  transition: opacity 160ms ease, transform 160ms ease, padding 160ms ease, min-height 160ms ease;
+}
+
+.period-save-toast.is-visible {
+  min-height: 32px;
+  padding: 8px 10px;
+  transform: translateY(0);
+  opacity: 1;
 }
 
 .period-picker {
@@ -1350,6 +1379,16 @@ audio {
   overflow: hidden;
 }
 
+.period-summary-list.is-stacked {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.period-summary-list.is-condensed {
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
 .period-summary-item {
   flex: 1 1 128px;
   max-width: 100%;
@@ -1383,6 +1422,32 @@ audio {
 
 .period-summary-item strong {
   color: var(--muted);
+}
+
+.period-summary-list:not(.is-condensed) .period-summary-item span {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.period-summary-chip {
+  flex: 1 1 0;
+  grid-template-columns: 1fr;
+  justify-items: center;
+  align-content: center;
+  gap: 1px;
+  min-width: 0;
+  text-align: center;
+}
+
+.period-summary-chip strong {
+  display: none;
+}
+
+.period-summary-chip span {
+  display: block;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  font-size: 11px;
 }
 
 .period-summary-empty {
@@ -1670,16 +1735,16 @@ audio {
   z-index: 18;
   width: 60px;
   height: 60px;
-  border: 1px solid rgba(31, 52, 48, 0.26);
+  border: 1px solid rgba(14, 116, 144, 0.34);
   border-radius: 50%;
   background:
     radial-gradient(circle at 34% 26%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.22) 35%, rgba(255, 255, 255, 0) 58%),
-    linear-gradient(145deg, #e1bc6d, #d49b42);
-  color: #1c1711;
+    linear-gradient(145deg, #9beafe, #43bfe8 58%, #2396c4);
+  color: #062f3c;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.72),
-    inset 0 -8px 16px rgba(84, 54, 19, 0.12),
-    0 12px 28px rgba(87, 61, 31, 0.27);
+    inset 0 -8px 16px rgba(6, 95, 126, 0.18),
+    0 12px 28px rgba(27, 134, 171, 0.28);
   font-size: 34px;
   line-height: 1;
   font-weight: 800;

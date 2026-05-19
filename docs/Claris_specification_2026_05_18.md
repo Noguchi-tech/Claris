@@ -1,6 +1,6 @@
 # Claris 仕様書
 
-更新日: 2026-05-18  
+更新日: 2026-05-19  
 対象: `Claris_app`
 
 ## 1. 起動仕様
@@ -9,7 +9,7 @@
 - `openDatabase()` で IndexedDB を開く。
 - `loadState()` と `normalizeState()` で保存済み state を補正する。
 - `applyBundledTaskImport()` で `data/claris-master-2026-05-18.json` を確認する。
-- `applyStartupUiPolicy()` で起動タブを `today` にする。
+- `applyStartupUiPolicy()` で起動タブを `today` にし、今日集計ブロックを閉じた状態に戻す。
 - `render()` 後に Service Worker を登録する。
 
 ## 2. 下部タブ仕様
@@ -24,6 +24,8 @@
 
 - `renderTodayView()` は今日の集計4項目を1つの折りたたみブロックとして描画する。
 - `ui.todayMetricsOpen` が `false` の時は「実施」「DL超過」「メモ」「運営」の4ボタンを非表示にする。
+- `ui.todayMetricsUserSet` が未設定の保存済み state は `normalizeState()` で `ui.todayMetricsOpen=false` に補正する。
+- 折りたたみブロックの見出しは「今日」とし、ユーザーが開閉した状態はタブ移動後も維持する。
 - `renderTodayPriorityFocus()` で最優先、2次優先、3次優先を専用スロット表示する。
 - 各スロットは先頭タスク、DL、担当者、追加件数を表示する。
 - 空きスロットは `add-task-slot` でその優先度のタスク追加フォームを開く。
@@ -108,7 +110,10 @@
 - 1件なら `半`、2件以上なら `半2` のように表示する。
 - DL は従来通り `DL` または `DL2` として表示する。
 - `renderCalendarPeriodSummary()` は選択日に有効な運営情報を `slice()` で制限せず全件描画する。
-- 件数が多い場合は `compactPeriodSummary()` の文字数上限を短くし、CSS の2行クランプで窓内に収める。
+- 1種類の種別では `readablePeriodText()` でタイトルと本文の重複を避け、収まる範囲では全文寄りに表示する。
+- 2種類の種別では `period-summary-list.is-stacked` で種別ごとに縦並びにする。
+- 3種類以上の種別では `period-summary-list.is-condensed` と `period-summary-chip` で `半期2` のような種別別件数を横並びにする。
+- 件数が多い場合は `compactPeriodSummary()` の文字数上限を短くし、CSS の行数制限で窓内に収める。
 - DL 日は通常日より濃い `--due-surface` で塗る。
 
 ## 9. 期間仕様
@@ -116,7 +121,7 @@
 - `renderPolicyPeriodField()` は hidden input と dataset を持つ。
 - `selectPolicyPeriodDate()` はドラフト値のみ更新する。
 - `savePolicyPeriod()` はドラフト値を hidden input と saved dataset へ反映する。
-- 保存後は toast とインラインの軽いアニメーションで反応を返す。
+- 保存後は期間カレンダー上の `period-save-toast` に「期間を保存しました」と表示し、インラインの軽いアニメーションで反応を返す。
 - `periodSaveStateLabel()` は `formatPolicyPeriodRange()` の結果を表示し、値がなければ `期間なし` とする。
 
 ## 10. 設定仕様
@@ -127,19 +132,25 @@
 - 色覚補正設定は持たない。
 - 設定画面のデータ連携と外部 LLM 連携には装飾的な図示を出さない。
 
-## 11. LLM 自動判定仕様
+## 11. 追加フロー仕様
+
+- 右下の `open-add` から `openKind()` でタスク、メモ、運営情報フォームを開く場合は `dialogBackTarget` に追加種別選択画面を設定する。
+- フォーム右上の×または外部タップで未保存データがなければ、`returnToPreviousDialog()` で追加種別選択画面へ戻る。
+- 未保存データがある場合は従来通り保存、破棄、戻るを確認し、破棄を選ぶと追加種別選択画面へ戻る。
+
+## 12. LLM 自動判定仕様
 
 - `classifyMemoForm()` は判定中にボタンを disabled にし、ステータスを表示する。
 - `requestExternalMemoClassification()` は `provider`、`task`、`input`、`schema` を JSON POST する。
 - 戻り値は英語キーと日本語キーを両方受け付ける。
 - 静的 PWA 単体では、アプリ終了後も処理を継続するジョブ実行は仕様対象外とし、バックエンド追加時の拡張点とする。
 
-## 12. キャッシュ仕様
+## 13. キャッシュ仕様
 
-- Service Worker キャッシュ名は `claris-cache-v29`。
+- Service Worker キャッシュ名は `claris-cache-v30`。
 - `index.html` と `data/` は network first、その他静的アセットは cache first とする。
 
-## 13. 小型サーバー準備仕様
+## 14. 小型サーバー準備仕様
 
 - `server.mjs` は静的配信に加えて `GET /api/health` を返す。
 - `GET /api/capabilities` は常時同期、AI秘書化、音声常駐、Apple Watch、バックグラウンド自動処理の予定状態を JSON で返す。
