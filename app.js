@@ -2,9 +2,16 @@
   "use strict";
 
   const DB_NAME = "claris-local-db";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
+  const APP_VERSION = "2026.05.19-sync-metadata";
+  const STATE_SCHEMA_VERSION = 2;
   const STORE = "app";
+  const BACKUP_STORE = "backups";
+  const LOCAL_BACKUP_LIMIT = 10;
   const STATE_KEY = "state";
+  const LOCAL_BACKUP_TYPES = new Set(["before-sync", "before-restore", "before-metadata-migration"]);
+  const SYNC_STATUSES = new Set(["local-only", "pending", "synced", "conflict"]);
+  const SYNC_METADATA_COLLECTIONS = ["tasks", "memos", "policies", "departments"];
   const BUNDLED_TASK_IMPORT_URL = "./data/claris-master-2026-05-18.json";
   const SINGLE_SLOT_PRIORITIES = ["P1", "P2", "P3"];
   const PERIOD_LINE_CLASS_COUNT = 6;
@@ -178,7 +185,13 @@
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = () => {
-        request.result.createObjectStore(STORE);
+        const db = request.result;
+        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+        if (!db.objectStoreNames.contains(BACKUP_STORE)) {
+          const backupStore = db.createObjectStore(BACKUP_STORE, { keyPath: "id" });
+          backupStore.createIndex("createdAt", "createdAt", { unique: false });
+          backupStore.createIndex("type", "type", { unique: false });
+        }
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -203,10 +216,47 @@
     });
   }
 
+  function dbPutBackup(backup) {
+    return new Promise((resolve, reject) => {
+      const tx = app.db.transaction(BACKUP_STORE, "readwrite");
+      tx.objectStore(BACKUP_STORE).put(backup);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  function dbGetAllBackups() {
+    return new Promise((resolve, reject) => {
+      const tx = app.db.transaction(BACKUP_STORE, "readonly");
+      const request = tx.objectStore(BACKUP_STORE).getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  function dbDeleteBackups(ids) {
+    if (!ids.length) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const tx = app.db.transaction(BACKUP_STORE, "readwrite");
+      const store = tx.objectStore(BACKUP_STORE);
+      ids.forEach((id) => store.delete(id));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
   async function loadState() {
     const saved = await dbGet(STATE_KEY);
-    if (!saved) return createDefaultState();
-    return normalizeState(saved);
+    if (!saved) {
+      const initialState = createDefaultState();
+      await dbPut(STATE_KEY, initialState);
+      return initialState;
+    }
+    const needsMetadataMigration = stateNeedsMetadataMigration(saved);
+    if (needsMetadataMigration) await createLocalBackup("before-metadata-migration", saved);
+    const normalized = normalizeState(saved);
+    if (needsMetadataMigration) await dbPut(STATE_KEY, normalized);
+    return normalized;
   }
 
   function applyStartupUiPolicy() {
@@ -218,17 +268,72 @@
   }
 
   async function saveState() {
+    app.state.schemaVersion = STATE_SCHEMA_VERSION;
+    app.state.settings = app.state.settings || {};
+    if (!app.state.settings.deviceId) app.state.settings.deviceId = generateDeviceId();
     app.state.updatedAt = nowIso();
     await dbPut(STATE_KEY, app.state);
   }
 
-  function createDefaultState() {
+  async function createLocalBackup(type, sourceState = app.state) {
+    const backup = buildLocalBackupRecord(type, sourceState);
+    await dbPutBackup(backup);
+    await pruneLocalBackups();
+    return backup;
+  }
+
+  function buildLocalBackupRecord(type, sourceState = app.state) {
+    if (!LOCAL_BACKUP_TYPES.has(type)) throw new Error(`不明なバックアップ種別です: ${type}`);
     const createdAt = nowIso();
     return {
-      schemaVersion: 1,
+      id: uid("backup"),
+      type,
+      createdAt,
+      appVersion: APP_VERSION,
+      schemaVersion: Number(sourceState?.schemaVersion || 1),
+      deviceId: sourceState?.settings?.deviceId || "",
+      counts: getLocalDataCounts(sourceState),
+      payloadJson: buildLocalBackupJson(sourceState)
+    };
+  }
+
+  function buildLocalBackupJson(sourceState = app.state) {
+    const payload = buildPortableState(sourceState);
+    delete payload.lastFullSyncBackup;
+    delete payload.lastTaskImportBackup;
+    return JSON.stringify(payload);
+  }
+
+  function getLocalDataCounts(sourceState = app.state) {
+    return {
+      tasks: sourceState?.tasks?.length || 0,
+      memos: sourceState?.memos?.length || 0,
+      policies: sourceState?.policies?.length || 0,
+      departments: sourceState?.departments?.length || 0,
+      deletedItems: sourceState?.deletedItems?.length || 0
+    };
+  }
+
+  async function pruneLocalBackups(limit = LOCAL_BACKUP_LIMIT) {
+    const backups = await dbGetAllBackups();
+    const staleIds = backups
+      .slice()
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .slice(limit)
+      .map((backup) => backup.id)
+      .filter(Boolean);
+    await dbDeleteBackups(staleIds);
+  }
+
+  function createDefaultState() {
+    const createdAt = nowIso();
+    const deviceId = generateDeviceId();
+    return {
+      schemaVersion: STATE_SCHEMA_VERSION,
       createdAt,
       updatedAt: createdAt,
       settings: {
+        deviceId,
         workerName: "",
         showCompleted: true,
         showLinkedMemos: true,
@@ -258,7 +363,11 @@
         parentId,
         sortOrder: index + 1,
         createdAt,
-        updatedAt: createdAt
+        updatedAt: createdAt,
+        deletedAt: null,
+        syncStatus: "local-only",
+        deviceId,
+        version: 1
       })),
       projects: [],
       deletedItems: []
@@ -275,35 +384,45 @@
       tasks: Array.isArray(saved.tasks) ? saved.tasks : [],
       memos: Array.isArray(saved.memos) ? saved.memos : [],
       policies: Array.isArray(saved.policies) ? saved.policies : [],
-      departments: normalizeDepartments(saved.departments, base.departments),
+      departments: Array.isArray(saved.departments) ? saved.departments : base.departments,
       projects: [],
       deletedItems: Array.isArray(saved.deletedItems) ? saved.deletedItems : []
     };
-    merged.tasks = merged.tasks.map(normalizeTask);
-    merged.memos = merged.memos.map(normalizeMemo);
-    merged.policies = merged.policies.map(normalizePolicy);
+    merged.schemaVersion = STATE_SCHEMA_VERSION;
+    merged.settings.deviceId = normalizeDeviceId(merged.settings.deviceId) || base.settings.deviceId;
+    const metadataDefaults = { deviceId: merged.settings.deviceId, syncStatus: "local-only" };
+    merged.tasks = merged.tasks.map((task) => normalizeTask(task, metadataDefaults));
+    merged.memos = merged.memos.map((memo) => normalizeMemo(memo, metadataDefaults));
+    merged.policies = merged.policies.map((policy) => normalizePolicy(policy, metadataDefaults));
+    merged.departments = normalizeDepartments(merged.departments, base.departments, metadataDefaults);
     merged.settings.policyTypes = normalizePolicyTypes(merged.settings.policyTypes);
     if (!merged.ui.todayMetricsUserSet) merged.ui.todayMetricsOpen = false;
     delete merged.settings["color" + "VisionMode"];
-    merged.deletedItems = merged.deletedItems.map(normalizeDeletedItem);
+    merged.deletedItems = merged.deletedItems.map((item) => normalizeDeletedItem(item, metadataDefaults));
     return merged;
   }
 
-  function normalizeDepartments(departments, fallback = []) {
+  function normalizeDepartments(departments, fallback = [], metadataDefaults = {}) {
     const source = Array.isArray(departments) && departments.length ? departments : fallback;
-    const now = nowIso();
-    return source.map((department, index) => {
-      const id = department.id || uid("dept");
-      const defaultSort = defaultDepartmentOrderById.get(id);
-      return {
-        id,
-        name: normalizeDepartmentName(id, department.name),
-        parentId: "",
-        sortOrder: defaultSort || Number(department.sortOrder || index + 1),
-        createdAt: department.createdAt || now,
-        updatedAt: department.updatedAt || now
-      };
-    }).sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+    const now = metadataDefaults.now || nowIso();
+    return source
+      .map((department, index) => normalizeDepartment(department, index, { ...metadataDefaults, now }))
+      .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+  }
+
+  function normalizeDepartment(department = {}, index = 0, metadataDefaults = {}) {
+    const source = department || {};
+    const now = metadataDefaults.now || nowIso();
+    const id = source.id || uid("dept");
+    const defaultSort = defaultDepartmentOrderById.get(id);
+    return {
+      id,
+      name: normalizeDepartmentName(id, source.name),
+      parentId: "",
+      sortOrder: defaultSort || Number(source.sortOrder || index + 1),
+      createdAt: source.createdAt || now,
+      ...normalizeEntityMetadata(source, { ...metadataDefaults, now })
+    };
   }
 
   function normalizeDepartmentName(id, name) {
@@ -314,31 +433,33 @@
     return text || currentDefault || "未名称";
   }
 
-  function normalizeTask(task) {
+  function normalizeTask(task = {}, metadataDefaults = {}) {
+    const source = task || {};
+    const now = metadataDefaults.now || nowIso();
     return {
-      id: task.id || uid("task"),
-      title: task.title || "",
-      description: task.description || "",
-      assignee: task.assignee || "",
-      actionDate: task.actionDate || "",
-      dueDate: task.dueDate || "",
-      startTime: normalizeTaskTime(task.startTime),
-      endTime: normalizeTaskTime(task.endTime),
-      priority: normalizeTaskPriority(task.priority),
-      status: task.status || "active",
-      departmentId: task.departmentId || "",
+      id: source.id || uid("task"),
+      title: source.title || "",
+      description: source.description || "",
+      assignee: source.assignee || "",
+      actionDate: source.actionDate || "",
+      dueDate: source.dueDate || "",
+      startTime: normalizeTaskTime(source.startTime),
+      endTime: normalizeTaskTime(source.endTime),
+      priority: normalizeTaskPriority(source.priority),
+      status: source.status || "active",
+      departmentId: source.departmentId || "",
       projectId: "",
-      estimatedMinutes: Number(task.estimatedMinutes || 0),
-      memoIds: Array.isArray(task.memoIds) ? task.memoIds : [],
+      estimatedMinutes: Number(source.estimatedMinutes || 0),
+      memoIds: Array.isArray(source.memoIds) ? source.memoIds : [],
       showLinkedMemos: true,
-      recurrence: normalizeRecurrence(task.recurrence),
-      completedDates: normalizeDateList(task.completedDates),
-      generatedFromTaskId: task.generatedFromTaskId || "",
-      generatedFromDate: task.generatedFromDate || "",
-      generatedNextTaskId: task.generatedNextTaskId || "",
-      createdAt: task.createdAt || nowIso(),
-      updatedAt: task.updatedAt || nowIso(),
-      completedAt: task.completedAt || null
+      recurrence: normalizeRecurrence(source.recurrence),
+      completedDates: normalizeDateList(source.completedDates),
+      generatedFromTaskId: source.generatedFromTaskId || "",
+      generatedFromDate: source.generatedFromDate || "",
+      generatedNextTaskId: source.generatedNextTaskId || "",
+      createdAt: source.createdAt || now,
+      completedAt: source.completedAt || null,
+      ...normalizeEntityMetadata(source, { ...metadataDefaults, now })
     };
   }
 
@@ -356,43 +477,47 @@
     };
   }
 
-  function normalizeMemo(memo) {
+  function normalizeMemo(memo = {}, metadataDefaults = {}) {
+    const source = memo || {};
+    const now = metadataDefaults.now || nowIso();
     return {
-      id: memo.id || uid("memo"),
-      title: memo.title || firstLine(memo.body) || "メモ",
-      body: memo.body || "",
-      agenda: memo.agenda || "",
-      decisions: memo.decisions || "",
-      nextActions: memo.nextActions || "",
-      transcript: memo.transcript || "",
+      id: source.id || uid("memo"),
+      title: source.title || firstLine(source.body) || "メモ",
+      body: source.body || "",
+      agenda: source.agenda || "",
+      decisions: source.decisions || "",
+      nextActions: source.nextActions || "",
+      transcript: source.transcript || "",
       dueDate: "",
       priority: "SUB",
-      departmentId: memo.departmentId || "",
+      departmentId: source.departmentId || "",
       projectId: "",
-      taskIds: Array.isArray(memo.taskIds) ? memo.taskIds : [],
-      recordings: Array.isArray(memo.recordings) ? memo.recordings : [],
-      createdAt: memo.createdAt || nowIso(),
-      updatedAt: memo.updatedAt || nowIso()
+      taskIds: Array.isArray(source.taskIds) ? source.taskIds : [],
+      recordings: Array.isArray(source.recordings) ? source.recordings : [],
+      createdAt: source.createdAt || now,
+      ...normalizeEntityMetadata(source, { ...metadataDefaults, now })
     };
   }
 
-  function normalizePolicy(policy) {
+  function normalizePolicy(policy = {}, metadataDefaults = {}) {
+    const source = policy || {};
+    const now = metadataDefaults.now || nowIso();
     return {
-      ...policy,
-      id: policy.id || uid("policy"),
-      title: policy.title || OPERATIONS_LABEL,
-      type: normalizePolicyType(policy.type || "方針"),
-      periodStart: policy.periodStart || "",
-      periodEnd: policy.periodEnd || "",
-      departmentId: policy.departmentId || "",
-      background: policy.background || "",
-      policy: policy.policy || policy.content || "",
-      actions: policy.actions || "",
-      notes: policy.notes || "",
-      taskIds: Array.isArray(policy.taskIds) ? policy.taskIds : [],
-      memoIds: Array.isArray(policy.memoIds) ? policy.memoIds : [],
-      createdAt: policy.createdAt || nowIso(),
-      updatedAt: policy.updatedAt || nowIso()
+      ...source,
+      id: source.id || uid("policy"),
+      title: source.title || OPERATIONS_LABEL,
+      type: normalizePolicyType(source.type || "方針"),
+      periodStart: source.periodStart || "",
+      periodEnd: source.periodEnd || "",
+      departmentId: source.departmentId || "",
+      background: source.background || "",
+      policy: source.policy || source.content || "",
+      actions: source.actions || "",
+      notes: source.notes || "",
+      taskIds: Array.isArray(source.taskIds) ? source.taskIds : [],
+      memoIds: Array.isArray(source.memoIds) ? source.memoIds : [],
+      createdAt: source.createdAt || now,
+      ...normalizeEntityMetadata(source, { ...metadataDefaults, now })
     };
   }
 
@@ -421,13 +546,29 @@
     return priorityMeta[value] ? value : "SUB";
   }
 
-  function normalizeDeletedItem(item) {
+  function normalizeDeletedItem(item = {}, metadataDefaults = {}) {
+    const source = item || {};
+    const now = metadataDefaults.now || nowIso();
+    const deletedAt = source.deletedAt || now;
+    const deletedEntity = source.item && typeof source.item === "object"
+      ? {
+          ...source.item,
+          ...normalizeEntityMetadata(source.item, { ...metadataDefaults, now: deletedAt }),
+          updatedAt: source.item.updatedAt || deletedAt,
+          deletedAt: source.item.deletedAt || deletedAt
+        }
+      : {};
     return {
-      id: item.id || uid("deleted"),
-      kind: item.kind || "item",
-      title: item.title || "削除済み",
-      deletedAt: item.deletedAt || nowIso(),
-      item: item.item || {}
+      id: source.id || uid("deleted"),
+      kind: source.kind || "item",
+      title: source.title || "削除済み",
+      deletedAt,
+      createdAt: source.createdAt || deletedAt,
+      updatedAt: source.updatedAt || deletedAt,
+      syncStatus: normalizeSyncStatus(source.syncStatus, metadataDefaults.syncStatus || "local-only"),
+      deviceId: source.deviceId || metadataDefaults.deviceId || currentDeviceId() || "",
+      version: normalizeEntityVersion(source.version),
+      item: deletedEntity
     };
   }
 
@@ -1500,14 +1641,14 @@
     }
     const name = enteredName.trim() || "新しい分類";
     const now = nowIso();
-    const department = {
+    const department = markEntityChanged(normalizeDepartment({
       id: uid("dept"),
       name,
       parentId: "",
       sortOrder: app.state.departments.length + 1,
       createdAt: now,
       updatedAt: now
-    };
+    }, app.state.departments.length, { now }), null, now);
     app.state.departments.push(department);
     await saveState();
     refreshDepartmentSelects(select, department.id);
@@ -1860,14 +2001,14 @@
 
   function openDepartmentForm() {
     const createdAt = nowIso();
-    app.state.departments.push({
+    app.state.departments.push(markEntityChanged(normalizeDepartment({
       id: uid("dept"),
       name: "新しい分類",
       parentId: "",
       sortOrder: app.state.departments.length + 1,
       createdAt,
       updatedAt: createdAt
-    });
+    }, app.state.departments.length, { now: createdAt }), null, createdAt));
     saveState().then(() => {
       closeDialogs();
       openSettings();
@@ -2327,7 +2468,7 @@
     const id = form.dataset.id || uid("task");
     const existing = findById(app.state.tasks, id);
     const now = nowIso();
-    const task = normalizeTask({
+    const task = markEntityChanged(normalizeTask({
       ...existing,
       id,
       title: String(data.get("title") || "").trim(),
@@ -2349,7 +2490,7 @@
       updatedAt: now,
       status: existing?.status || "active",
       completedAt: existing?.completedAt || null
-    });
+    }), existing, now);
     closeDialogs();
     await saveTaskWithConflict(task, {
       originalActionDate: form.dataset.originalActionDate || "",
@@ -2485,10 +2626,11 @@
       return true;
     }
     if (mode === "move-existing") {
+      const now = nowIso();
       conflicts.forEach((existing) => {
         existing.actionDate = context.moveDate;
         existing.priority = context.movePriority;
-        existing.updatedAt = nowIso();
+        markEntityChanged(existing, existing, now);
       });
       return true;
     }
@@ -2534,7 +2676,7 @@
     ).trim();
     const recordings = [...(existing?.recordings || []), ...app.pendingRecordings];
     const now = nowIso();
-    const memo = normalizeMemo({
+    const memo = markEntityChanged(normalizeMemo({
       ...existing,
       id,
       title: String(data.get("title") || "").trim() || firstLine(body) || "メモ",
@@ -2551,7 +2693,7 @@
       recordings,
       createdAt: existing?.createdAt || now,
       updatedAt: now
-    });
+    }), existing, now);
     upsertById(app.state.memos, memo);
     syncTaskLinksForMemo(memo);
     await saveState();
@@ -2654,7 +2796,9 @@
   }
 
   async function savePolicyPayload(payload) {
-    upsertById(app.state.policies, normalizePolicy(payload));
+    const existing = findById(app.state.policies, payload.id);
+    const changedAt = payload.updatedAt || nowIso();
+    upsertById(app.state.policies, markEntityChanged(normalizePolicy(payload), existing, changedAt));
     await saveState();
     closeDialogs();
     render();
@@ -2664,16 +2808,17 @@
   async function toggleTask(id, date = "") {
     const task = findById(app.state.tasks, id);
     if (!task) return;
+    const now = nowIso();
     if (task.status === "completed") {
       removeGeneratedNextTask(task);
       task.status = "active";
       task.completedAt = null;
     } else {
       task.status = "completed";
-      task.completedAt = nowIso();
+      task.completedAt = now;
       createNextRecurringTask(task, date || task.actionDate || todayIso());
     }
-    task.updatedAt = nowIso();
+    markEntityChanged(task, task, now);
     await saveState();
     render();
   }
@@ -2683,7 +2828,7 @@
     const nextDate = getNextRecurrenceDate(task, completedDate);
     if (!nextDate) return;
     const now = nowIso();
-    const next = normalizeTask({
+    const next = markEntityChanged(normalizeTask({
       ...task,
       id: uid("task"),
       actionDate: nextDate,
@@ -2696,7 +2841,7 @@
       generatedNextTaskId: "",
       createdAt: now,
       updatedAt: now
-    });
+    }), null, now);
     if (SINGLE_SLOT_PRIORITIES.includes(next.priority) && getPriorityOccupants(next.actionDate, next.priority, [task.id]).length) {
       next.priority = findAvailablePriority(next.actionDate, next.id, [next.priority]);
     }
@@ -2716,9 +2861,12 @@
     if (!nextId) return;
     const next = findById(app.state.tasks, nextId);
     if (next && next.generatedFromTaskId === task.id) {
+      const now = nowIso();
       app.state.tasks = app.state.tasks.filter((item) => item.id !== nextId);
       app.state.memos.forEach((memo) => {
+        if (!memo.taskIds.includes(nextId)) return;
         memo.taskIds = memo.taskIds.filter((taskId) => taskId !== nextId);
+        markEntityChanged(memo, memo, now);
       });
     }
     task.generatedNextTaskId = "";
@@ -2764,12 +2912,13 @@
   async function assignTaskToToday(id, priority) {
     const existing = findById(app.state.tasks, id);
     if (!existing) return;
-    const task = normalizeTask({
+    const now = nowIso();
+    const task = markEntityChanged(normalizeTask({
       ...existing,
       actionDate: todayIso(),
       priority: priorityMeta[priority] ? priority : "SUB",
-      updatedAt: nowIso()
-    });
+      updatedAt: now
+    }), existing, now);
     closeDialogs();
     await saveTaskWithConflict(task, {
       originalActionDate: existing.actionDate || "",
@@ -2781,7 +2930,7 @@
     const task = findById(app.state.tasks, id);
     if (!task) return;
     const now = nowIso();
-    const copy = normalizeTask({
+    const copy = markEntityChanged(normalizeTask({
       ...task,
       id: uid("task"),
       title: `${task.title} コピー`,
@@ -2789,7 +2938,7 @@
       completedAt: null,
       createdAt: now,
       updatedAt: now
-    });
+    }), null, now);
     app.state.tasks.push(copy);
     await saveState();
     render();
@@ -2799,11 +2948,14 @@
   async function deleteEntity(collection, id, message) {
     const item = findById(app.state[collection], id);
     if (!item) return;
+    const now = nowIso();
     addDeletedItem(collection, item);
     app.state[collection] = app.state[collection].filter((item) => item.id !== id);
     if (collection === "tasks") {
       app.state.memos.forEach((memo) => {
+        if (!memo.taskIds.includes(id)) return;
         memo.taskIds = memo.taskIds.filter((taskId) => taskId !== id);
+        markEntityChanged(memo, memo, now);
       });
     }
     await saveState();
@@ -2814,10 +2966,13 @@
   async function deleteMemo(id) {
     const memo = findById(app.state.memos, id);
     if (!memo) return;
+    const now = nowIso();
     addDeletedItem("memos", memo);
     app.state.memos = app.state.memos.filter((memo) => memo.id !== id);
     app.state.tasks.forEach((task) => {
+      if (!task.memoIds.includes(id)) return;
       task.memoIds = task.memoIds.filter((memoId) => memoId !== id);
+      markEntityChanged(task, task, now);
     });
     await saveState();
     render();
@@ -2825,32 +2980,54 @@
   }
 
   function addDeletedItem(kind, item) {
+    const deletedAt = nowIso();
+    const deletedItem = markEntityDeleted(item, deletedAt);
     app.state.deletedItems.unshift(normalizeDeletedItem({
       id: uid("deleted"),
       kind,
       title: entityTitle(kind, item),
-      deletedAt: nowIso(),
-      item: cloneForStorage(item)
-    }));
+      deletedAt,
+      createdAt: deletedAt,
+      updatedAt: deletedAt,
+      syncStatus: "pending",
+      deviceId: currentDeviceId(),
+      version: deletedItem.version,
+      item: deletedItem
+    }, { syncStatus: "pending", deviceId: currentDeviceId(), now: deletedAt }));
     app.state.deletedItems = app.state.deletedItems.slice(0, 200);
   }
 
   async function restoreDeletedItem(id) {
     const deleted = findById(app.state.deletedItems, id);
     if (!deleted) return;
+    try {
+      await createLocalBackup("before-restore");
+    } catch (error) {
+      showToast(`復元前バックアップの作成に失敗しました: ${error.message}`);
+      return;
+    }
     const kind = deleted.kind;
+    const now = nowIso();
     if (kind === "tasks") {
-      const task = normalizeTask(deleted.item);
+      const task = markEntityChanged(normalizeTask({ ...deleted.item, deletedAt: null }), deleted.item, now);
       upsertById(app.state.tasks, task);
       syncMemoLinksForTask(task);
     }
     if (kind === "memos") {
-      const memo = normalizeMemo(deleted.item);
+      const memo = markEntityChanged(normalizeMemo({ ...deleted.item, deletedAt: null }), deleted.item, now);
       upsertById(app.state.memos, memo);
       syncTaskLinksForMemo(memo);
     }
     if (kind === "policies") {
-      upsertById(app.state.policies, normalizePolicy(deleted.item));
+      upsertById(app.state.policies, markEntityChanged(normalizePolicy({ ...deleted.item, deletedAt: null }), deleted.item, now));
+    }
+    if (kind === "departments") {
+      const department = markEntityChanged(
+        normalizeDepartment({ ...deleted.item, deletedAt: null }, app.state.departments.length, { now }),
+        deleted.item,
+        now
+      );
+      upsertById(app.state.departments, department);
     }
     app.state.deletedItems = app.state.deletedItems.filter((item) => item.id !== id);
     await saveState();
@@ -3058,7 +3235,7 @@
       return;
     }
     const now = nowIso();
-    app.state.memos.unshift(normalizeMemo({
+    app.state.memos.unshift(markEntityChanged(normalizeMemo({
       id: uid("memo"),
       title: firstLine(body) || firstLine(transcript) || "録音メモ",
       body,
@@ -3066,7 +3243,7 @@
       recordings,
       createdAt: now,
       updatedAt: now
-    }));
+    }), null, now));
     textarea.value = "";
     app.pendingRecordings = [];
     app.pendingRecordingTranscript = "";
@@ -3430,7 +3607,7 @@
   }
 
   function renderDeletedItems() {
-    if (!app.state.deletedItems.length) return `<p class="body-preview">削除したタスク、メモ、運営情報はここにまとまります。</p>`;
+    if (!app.state.deletedItems.length) return `<p class="body-preview">削除したタスク、メモ、運営情報、分類はここにまとまります。</p>`;
     return `
       <div class="deleted-list">
         ${app.state.deletedItems.slice(0, 40).map((deleted) => `
@@ -3450,7 +3627,7 @@
   }
 
   function deletedKindLabel(kind) {
-    return ({ tasks: "タスク", memos: "メモ", policies: OPERATIONS_LABEL })[kind] || "項目";
+    return ({ tasks: "タスク", memos: "メモ", policies: OPERATIONS_LABEL, departments: CLASSIFICATION_LABEL })[kind] || "項目";
   }
 
   function renderDepartmentRow(department) {
@@ -3512,14 +3689,28 @@
     delete app.state.settings["color" + "VisionMode"];
     app.state.settings.llmProvider = String(data.get("llmProvider") || "").trim();
     app.state.settings.llmEndpoint = String(data.get("llmEndpoint") || "").trim();
-    app.state.departments = [...form.querySelectorAll('[data-row="department"]')].map((row, index) => ({
-      id: row.dataset.id || uid("dept"),
-      name: row.querySelector("input")?.value.trim() || "未名称",
-      parentId: "",
-      sortOrder: index + 1,
-      createdAt: findById(app.state.departments, row.dataset.id)?.createdAt || now,
-      updatedAt: now
-    }));
+    const previousDepartments = app.state.departments;
+    const departmentRows = [...form.querySelectorAll('[data-row="department"]')];
+    const nextDepartmentIds = new Set(departmentRows.map((row) => row.dataset.id).filter(Boolean));
+    app.state.departments = departmentRows.map((row, index) => {
+      const existing = findById(previousDepartments, row.dataset.id);
+      const next = {
+        ...normalizeEntityMetadata(existing || {}, { deviceId: currentDeviceId(), now }),
+        id: row.dataset.id || uid("dept"),
+        name: row.querySelector("input")?.value.trim() || "未名称",
+        parentId: "",
+        sortOrder: index + 1,
+        createdAt: existing?.createdAt || now
+      };
+      const changed = !existing ||
+        existing.name !== next.name ||
+        String(existing.parentId || "") !== next.parentId ||
+        Number(existing.sortOrder || 0) !== next.sortOrder;
+      return changed ? markEntityChanged(next, existing, now) : next;
+    });
+    previousDepartments
+      .filter((department) => department.id && !nextDepartmentIds.has(department.id))
+      .forEach((department) => addDeletedItem("departments", department));
     app.state.settings.policyTypes = normalizePolicyTypes([...form.querySelectorAll('[data-row="policyType"] input')]
       .map((input) => input.value.trim())
       .filter(Boolean));
@@ -3644,6 +3835,7 @@
       if (!importId || app.state.settings.appliedTaskImportId === importId) return;
 
       if (payload.fullSync) {
+        await createLocalBackup("before-sync");
         replaceStateFromMasterPayload(payload, importId);
         app.state.settings.appliedTaskImportId = importId;
         await saveState();
@@ -3653,8 +3845,9 @@
 
       const imported = importJson(JSON.stringify(payload));
       if (!imported.tasks.length) return;
+      await createLocalBackup("before-sync");
       replaceTasksFromImport(imported.tasks, importId);
-      upsertPoliciesFromImport(imported.policies);
+      upsertPoliciesFromImport(imported.policies, nowIso(), "local-only");
       app.state.settings.appliedTaskImportId = importId;
       await saveState();
       showToast(`${imported.tasks.length}件のタスクを指定ファイルで上書きし、${imported.policies.length}件の運営情報を同期しました。`);
@@ -3672,6 +3865,7 @@
         const parsed = JSON.parse(text);
         if (isFullSyncMasterPayload(parsed)) {
           const importId = String(parsed.importId || `manual-${Date.now()}`);
+          await createLocalBackup("before-sync");
           replaceStateFromMasterPayload(parsed, importId);
           app.state.settings.appliedTaskImportId = importId;
           await saveState();
@@ -3689,8 +3883,8 @@
       return { tasks: 0, memos: 0 };
     }
     const now = nowIso();
-    app.state.tasks.push(...normalizeImportedTasks(imported.tasks, now));
-    imported.memos.forEach((memo) => app.state.memos.push(normalizeMemo({ ...memo, id: uid("memo"), createdAt: now, updatedAt: now })));
+    app.state.tasks.push(...normalizeImportedTasks(imported.tasks, now, "pending"));
+    imported.memos.forEach((memo) => app.state.memos.push(markEntityChanged(normalizeMemo({ ...memo, id: uid("memo"), createdAt: now, updatedAt: now }), null, now)));
     upsertPoliciesFromImport(imported.policies, now);
     await saveState();
     return { tasks: imported.tasks.length, memos: imported.memos.length, policies: imported.policies.length };
@@ -3720,17 +3914,17 @@
         .filter((memo) => memo.taskIds?.length)
         .map((memo) => ({ memoId: memo.id, taskIds: [...memo.taskIds] }))
     };
-    app.state.tasks = normalizeImportedTasks(tasks, now);
+    app.state.tasks = normalizeImportedTasks(tasks, now, "local-only");
     app.state.memos.forEach((memo) => {
       if (!memo.taskIds?.length) return;
       memo.taskIds = [];
-      memo.updatedAt = now;
+      markEntityChanged(memo, memo, now);
     });
   }
 
-  function upsertPoliciesFromImport(policies, now = nowIso()) {
+  function upsertPoliciesFromImport(policies, now = nowIso(), syncStatus = "pending") {
     policies.forEach((policy) => {
-      const normalized = {
+      const normalized = normalizePolicy({
         ...policy,
         id: policy.id || uid("policy"),
         title: policy.title || "方針",
@@ -3746,10 +3940,14 @@
         memoIds: Array.isArray(policy.memoIds) ? policy.memoIds : [],
         createdAt: policy.createdAt || now,
         updatedAt: now
-      };
+      }, { syncStatus, now });
       const existing = app.state.policies.find((item) => item.title === normalized.title && item.type === normalized.type);
-      if (existing) upsertById(app.state.policies, { ...existing, ...normalized, id: existing.id, createdAt: existing.createdAt || normalized.createdAt });
-      else app.state.policies.push(normalized);
+      if (existing) {
+        const next = { ...existing, ...normalized, id: existing.id, createdAt: existing.createdAt || normalized.createdAt };
+        upsertById(app.state.policies, syncStatus === "pending" ? markEntityChanged(next, existing, now) : next);
+      } else {
+        app.state.policies.push(syncStatus === "pending" ? markEntityChanged(normalized, null, now) : normalized);
+      }
     });
   }
 
@@ -3765,32 +3963,38 @@
       projects: app.state.projects
     };
     if (payload.settings && typeof payload.settings === "object") {
+      const deviceId = app.state.settings.deviceId || generateDeviceId();
       app.state.settings = {
         ...app.state.settings,
         ...payload.settings,
+        deviceId,
         policyTypes: normalizePolicyTypes(payload.settings.policyTypes || app.state.settings.policyTypes),
         appliedTaskImportId: importId
       };
       delete app.state.settings["color" + "VisionMode"];
     }
-    app.state.tasks = Array.isArray(payload.tasks) ? payload.tasks.map(normalizeTask) : app.state.tasks;
-    app.state.memos = Array.isArray(payload.memos) ? payload.memos.map(normalizeMemo) : app.state.memos;
-    app.state.policies = Array.isArray(payload.policies) ? payload.policies.map(normalizePolicy) : app.state.policies;
-    app.state.departments = normalizeDepartments(payload.departments, app.state.departments);
+    const metadataDefaults = { syncStatus: "local-only", deviceId: app.state.settings.deviceId, now };
+    app.state.tasks = Array.isArray(payload.tasks) ? payload.tasks.map((task) => normalizeTask(task, metadataDefaults)) : app.state.tasks;
+    app.state.memos = Array.isArray(payload.memos) ? payload.memos.map((memo) => normalizeMemo(memo, metadataDefaults)) : app.state.memos;
+    app.state.policies = Array.isArray(payload.policies) ? payload.policies.map((policy) => normalizePolicy(policy, metadataDefaults)) : app.state.policies;
+    app.state.departments = normalizeDepartments(payload.departments, app.state.departments, metadataDefaults);
     app.state.projects = [];
-    app.state.deletedItems = Array.isArray(payload.deletedItems) ? payload.deletedItems.map(normalizeDeletedItem) : app.state.deletedItems;
+    app.state.deletedItems = Array.isArray(payload.deletedItems) ? payload.deletedItems.map((item) => normalizeDeletedItem(item, metadataDefaults)) : app.state.deletedItems;
     app.state.updatedAt = now;
   }
 
-  function normalizeImportedTasks(tasks, now) {
-    return tasks.map((task) => normalizeTask({
-      ...task,
-      id: uid("task"),
-      status: task.status || "active",
-      completedAt: task.status === "completed" ? (task.completedAt || now) : (task.completedAt || null),
-      createdAt: now,
-      updatedAt: now
-    }));
+  function normalizeImportedTasks(tasks, now, syncStatus = "pending") {
+    return tasks.map((task) => {
+      const normalized = normalizeTask({
+        ...task,
+        id: uid("task"),
+        status: task.status || "active",
+        completedAt: task.status === "completed" ? (task.completedAt || now) : (task.completedAt || null),
+        createdAt: now,
+        updatedAt: now
+      }, { syncStatus, now });
+      return syncStatus === "pending" ? markEntityChanged(normalized, null, now) : normalized;
+    });
   }
 
   function importJson(text) {
@@ -3980,11 +4184,14 @@
     }, `claris-master-${todayIso()}.json`);
   }
 
-  function buildPortableState() {
+  function buildPortableState(sourceState = app.state) {
+    const source = sourceState || {};
+    const memos = Array.isArray(source.memos) ? source.memos : [];
+    const deletedItems = Array.isArray(source.deletedItems) ? source.deletedItems : [];
     return {
-      ...app.state,
+      ...source,
       projects: [],
-      memos: app.state.memos.map((memo) => ({
+      memos: memos.map((memo) => ({
         ...memo,
         recordings: (memo.recordings || []).map((recording) => ({
           id: recording.id,
@@ -3995,7 +4202,7 @@
           blobOmitted: true
         }))
       })),
-      deletedItems: app.state.deletedItems.map((deleted) => ({
+      deletedItems: deletedItems.map((deleted) => ({
         ...deleted,
         item: sanitizePortableEntity(deleted.item)
       }))
@@ -4699,21 +4906,28 @@
       const includes = memo.taskIds.includes(task.id);
       if (has && !includes) {
         memo.taskIds.push(task.id);
-        memo.updatedAt = now;
+        markEntityChanged(memo, memo, now);
       }
       if (!has && includes) {
         memo.taskIds = memo.taskIds.filter((id) => id !== task.id);
-        memo.updatedAt = now;
+        markEntityChanged(memo, memo, now);
       }
     });
   }
 
   function syncTaskLinksForMemo(memo) {
+    const now = nowIso();
     app.state.tasks.forEach((task) => {
       const has = memo.taskIds.includes(task.id);
       const includes = task.memoIds.includes(memo.id);
-      if (has && !includes) task.memoIds.push(memo.id);
-      if (!has && includes) task.memoIds = task.memoIds.filter((id) => id !== memo.id);
+      if (has && !includes) {
+        task.memoIds.push(memo.id);
+        markEntityChanged(task, task, now);
+      }
+      if (!has && includes) {
+        task.memoIds = task.memoIds.filter((id) => id !== memo.id);
+        markEntityChanged(task, task, now);
+      }
     });
   }
 
@@ -5108,6 +5322,111 @@
 
   function nowIso() {
     return new Date().toISOString();
+  }
+
+  function stateNeedsMetadataMigration(state) {
+    if (!state || typeof state !== "object") return false;
+    if (Number(state.schemaVersion || 1) < STATE_SCHEMA_VERSION) return true;
+    if (!normalizeDeviceId(state.settings?.deviceId)) return true;
+    const hasActiveItemMissingMetadata = SYNC_METADATA_COLLECTIONS.some((collection) =>
+      (Array.isArray(state[collection]) ? state[collection] : []).some(isEntityMissingSyncMetadata)
+    );
+    if (hasActiveItemMissingMetadata) return true;
+    return (Array.isArray(state.deletedItems) ? state.deletedItems : []).some(isDeletedItemMissingSyncMetadata);
+  }
+
+  function isEntityMissingSyncMetadata(item) {
+    if (!item || typeof item !== "object") return true;
+    return (
+      !item.updatedAt ||
+      !Object.prototype.hasOwnProperty.call(item, "deletedAt") ||
+      !SYNC_STATUSES.has(item.syncStatus) ||
+      !normalizeDeviceId(item.deviceId) ||
+      !isValidEntityVersion(item.version)
+    );
+  }
+
+  function isDeletedItemMissingSyncMetadata(item) {
+    if (isEntityMissingSyncMetadata(item)) return true;
+    if (!item.deletedAt) return true;
+    if (!item.item || typeof item.item !== "object") return false;
+    return !item.item.deletedAt || !isValidEntityVersion(item.item.version);
+  }
+
+  function normalizeEntityMetadata(source = {}, metadataDefaults = {}) {
+    const now = metadataDefaults.now || nowIso();
+    const deviceId = normalizeDeviceId(source.deviceId) ||
+      normalizeDeviceId(metadataDefaults.deviceId) ||
+      currentDeviceId() ||
+      generateDeviceId();
+    return {
+      updatedAt: source.updatedAt || metadataDefaults.updatedAt || now,
+      deletedAt: source.deletedAt || null,
+      syncStatus: normalizeSyncStatus(source.syncStatus, metadataDefaults.syncStatus || "local-only"),
+      deviceId,
+      version: normalizeEntityVersion(source.version)
+    };
+  }
+
+  function markEntityChanged(entity, previous = null, changedAt = nowIso()) {
+    const deviceId = currentDeviceId() || entity.deviceId || generateDeviceId();
+    entity.updatedAt = changedAt;
+    entity.deletedAt = null;
+    entity.syncStatus = "pending";
+    entity.deviceId = deviceId;
+    entity.version = previous ? normalizeEntityVersion(previous.version) + 1 : 1;
+    return entity;
+  }
+
+  function markEntityDeleted(item, deletedAt = nowIso()) {
+    const snapshot = cloneForStorage(item);
+    snapshot.updatedAt = deletedAt;
+    snapshot.deletedAt = deletedAt;
+    snapshot.syncStatus = "pending";
+    snapshot.deviceId = currentDeviceId() || snapshot.deviceId || generateDeviceId();
+    snapshot.version = normalizeEntityVersion(item.version) + 1;
+    return snapshot;
+  }
+
+  function normalizeSyncStatus(value, fallback = "local-only") {
+    const status = String(value || "").trim();
+    if (SYNC_STATUSES.has(status)) return status;
+    return SYNC_STATUSES.has(fallback) ? fallback : "local-only";
+  }
+
+  function normalizeEntityVersion(value) {
+    const version = Number(value);
+    return Number.isInteger(version) && version > 0 ? version : 1;
+  }
+
+  function isValidEntityVersion(value) {
+    const version = Number(value);
+    return Number.isInteger(version) && version > 0;
+  }
+
+  function currentDeviceId() {
+    return normalizeDeviceId(app.state?.settings?.deviceId);
+  }
+
+  function normalizeDeviceId(value) {
+    return String(value || "").trim();
+  }
+
+  function generateDeviceId() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+    else bytes.forEach((_, index) => { bytes[index] = Math.floor(Math.random() * 256); });
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0"));
+    return [
+      hex.slice(0, 4).join(""),
+      hex.slice(4, 6).join(""),
+      hex.slice(6, 8).join(""),
+      hex.slice(8, 10).join(""),
+      hex.slice(10, 16).join("")
+    ].join("-");
   }
 
   function formatLongDate(isoDate) {
