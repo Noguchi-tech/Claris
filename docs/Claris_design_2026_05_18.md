@@ -90,15 +90,13 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主
 - 保存時は `appendUniqueText()` で重複を避けて本文と文字起こし欄へ反映する。
 - 文字起こし API が使えない場合でも録音ファイルは保存待ちにできる。
 
-## 10. LLM 連携設計
+## 10. AI 整理連携設計
 
-メモの自動判定は `classifyMemoForm()` から実行する。
+メモの自動判定ボタン、`classifyMemoForm()`、外部 LLM への直接 POST、ローカル自動分類フォールバックは廃止済み。Claris 内では AI 処理を実行しない。
 
-- 入力元はタイトル、本文、文字起こし。
-- `settings.llmEndpoint` が設定されていれば POST する。
-- 戻り値は `title`、`agenda`、`decisions`、`nextActions` または `議題`、`方針`、`行動` を受け付ける。
-- 通信失敗時は `organizeText()` のローカル判定へフォールバックする。
-- 設定画面では図示を使わず、連携名とエンドポイント、データ取り込み操作だけを簡潔に置く。
+- 保存済みメモから AI 整理用 JSON ファイルを生成し、Web Share API またはダウンロードで外部 LLM へ渡す。
+- 外部 LLM から戻す JSON は `memo_ai_summary` 形式だけを受け付け、メモ ID と `agendas` / `policies` / `actions` の文字列配列を検証する。
+- 設定画面には外部 LLM 連携名やエンドポイントを置かない。
 
 ## 11. 将来拡張設計
 
@@ -106,7 +104,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存する。主
 
 - `/api/health`: ローカルサーバーの起動確認。
 - `/api/capabilities`: 常時同期、AI秘書化、音声常駐、Apple Watch、バックグラウンド自動処理の予定状態を返す。
-- 同期・外部 LLM・バックグラウンド処理の実行は、認証と保存方式が決まるまでスタブに留める。
+- 同期・バックグラウンド処理の実行は、認証と保存方式が決まるまでスタブに留める。外部 LLM 連携は現時点では JSON ファイル共有方式だけを使う。
 
 ## 12. 配置設計
 

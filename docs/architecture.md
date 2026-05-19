@@ -1,6 +1,6 @@
 # Claris アーキテクチャ設計書
 
-更新日: 2026-05-19  
+更新日: 2026-05-20  
 対象: `Claris_app`
 
 この文書は Claris の標準設計入口である。詳細な既存設計は `Claris_design_2026_05_18.md` と `Claris_specification_2026_05_18.md` を参照する。
@@ -84,15 +84,21 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 - 関連メモ検索はタイトル、本文、文字起こし、議題、方針、行動を対象にし、`normalizeSearchText()` の表記揺れ吸収を使う。
 - 優先タスクカードと優先度表示の色は、`P1` 赤、`P2` 黄、`P3` 青、`SUB` 緑系とする。保存値と優先順は `P1`、`P2`、`P3`、`SUB` のまま維持する。
 - アプリ起動直後の初回カレンダータブ表示では、ローカル日付の今日を `ui.selectedDate` と `ui.calendarMonth` に反映する。これは起動中だけの初回処理であり、ユーザーが日付を選んだ後の再訪では選択状態を戻さない。
+- メモ編集画面の関連タスクは `renderTaskPicker()` で描画し、検索欄と一覧を折りたたみ body に入れる。折りたたみは一時的な UI 状態であり、`memo.taskIds`、`syncTaskLinksForMemo()`、`syncMemoLinksForTask()` の保存仕様は変更しない。
+- メモ本文、議題、方針、行動は `renderExpandableMemoField()` で右下に拡張ボタンを持つ textarea として描画する。拡張状態は DOM クラスだけで扱い、IndexedDB へ保存しない。
+- ダイアログ内スクロール位置は `captureDialogScrollState()` / `restoreDialogScrollState()` で、`render()`、`visibilitychange`、`resize`、`orientationchange`、`visualViewport.resize` の前後に保持する。通常の新規カード表示、保存して閉じる、タブ切替の意図的な遷移は既存経路を維持する。
 
 ## 6. AI整理結果取り込み設計
 
-メモ AI 整理は Claris 内で AI 処理を実行せず、保存済みメモの「AI整理用にコピー」で外部 LLM 用プロンプトを作り、外部 LLM の JSON 回答を手動で貼り付けるか `.json` ファイルとして選択して取り込む。
+メモ AI 整理は Claris 内で AI 処理を実行せず、保存済みメモの「AI整理用JSONを共有」で外部 LLM 用 `.json` ファイルを作り、外部 LLM の JSON 回答を手動で貼り付けるか `.json` ファイルとして選択して取り込む。設定画面に外部 LLM エンドポイントは持たず、PWA 本体から外部 LLM へ直接 POST しない。
 
+- `shareMemoAiJson()` は現在のメモフォームから `createMemoAiExportPayload(memo)` を作り、`ClarisにインポートするAI整理用_YYYY-MM-DD_メモタイトル.json` 形式のファイル名で共有する。
+- AI 整理用 JSON は `clarisExportType`、`version`、`memoId`、`title`、`body`、`transcript`、`createdAt`、`updatedAt`、`instruction`、`expectedImportFormat` を含む。
+- Web Share API で `File` 共有できる環境では共有シートを開き、未対応環境や共有不可の場合は同じ `.json` をダウンロードする。
 - `.json` ファイル選択時は FileReader で内容を読み込み、取り込み前にテキストエリアへ反映する。
 - `parseMemoAiImportJson(text)` は、前後の空白と BOM を除去したうえで、純粋な JSON、JSON コードブロック、前後に説明文が混じるテキストから安全に単一 JSON オブジェクトを抽出できる場合だけ解析する。抽出が曖昧な場合は取り込まない。JSON.parse 失敗時は行・列、付近の断片、スマートクォート混入などを表示する。
 - `validateMemoAiImport(data, currentMemoId)` は `clarisImportType === "memo_ai_summary"`、`version === 1`、現在開いているメモ ID と一致する `memoId`、`agendas` / `policies` / `actions` が文字列配列であることを要求する。`title` は必須条件にしない。
-- `applyMemoAiSummaryToMemo(memo, summary)` は `agendas` を `agenda`、`policies` を `decisions`、`actions` を `nextActions` へ改行区切りで反映する。
+- `applyMemoAiSummaryToMemo(memo, summary)` は `agendas` を `agenda`、`policies` を `decisions`、`actions` を `nextActions` へ反映する。反映時は `agendas` の各項目に `■`、`policies` に `●`、`actions` に `・` を付け、文章は必要に応じて文末に `。` を補う。
 - 反映時は `saveMemoFromForm()` を通し、通常のメモ更新と同じ `updatedAt`、`syncStatus`、`version` 更新を行う。
 - 既存の整理欄がある場合は上書き確認を挟み、キャンセル時や検証失敗時は保存データを変更しない。
 

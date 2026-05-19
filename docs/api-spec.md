@@ -1,6 +1,6 @@
 # Claris API 仕様書
 
-更新日: 2026-05-19  
+更新日: 2026-05-20  
 対象: `Claris_app/server.mjs` と将来同期 API
 
 この文書は Claris の標準 API 入口である。現時点の `server.mjs` は静的配信と確認 API のみを担当し、データ書き込みや同期は行わない。
@@ -40,7 +40,7 @@
 
 - API は静的 PWA を壊さず、必要になった段階で追加する。
 - 初期段階では IndexedDB を正とし、サーバーはバックアップ・同期先として扱う。
-- メモ AI 整理は当面サーバー API を使わず、保存済みメモの本文と文字起こしから手動貼り付け用プロンプトをコピーし、外部 LLM の JSON 回答をメモ画面で検証して取り込む。Claris 内では AI 処理を実行しない。
+- メモ AI 整理は当面サーバー API を使わず、保存済みメモの本文と文字起こしを含む `.json` ファイルを共有し、外部 LLM の JSON 回答をメモ画面で検証して取り込む。Claris 内では AI 処理を実行せず、PWA 本体から外部 LLM へ直接 POST しない。
 - 将来 API 化する場合も、クライアント側の `memo_ai_summary` JSON 形式、`agendas` / `policies` / `actions` 配列、メモ ID 検証を維持する。
 - 同期前には必ずローカルバックアップを作成する。
 - オフライン時は API 呼び出しに失敗してもローカル保存を優先する。
@@ -49,6 +49,37 @@
 - ローカルデータには API 実装前から `deviceId`、`version`、`updatedAt`、`deletedAt`、`syncStatus` を保持する。
 
 ## 3. メモ AI 整理 JSON 形式
+
+### 3.1 AI 整理用エクスポート JSON
+
+Claris から外部 LLM アプリへ渡すファイルは、次の情報を含む `.json` とする。ファイル名は `ClarisにインポートするAI整理用_YYYY-MM-DD_メモタイトル.json` のように、Claris へ戻すための AI 整理用データだと分かる名前にする。
+
+```json
+{
+  "clarisExportType": "memo_ai_summary_request",
+  "version": 1,
+  "memoId": "対象メモID",
+  "title": "対象メモタイトル",
+  "body": "本文",
+  "transcript": "文字起こし",
+  "createdAt": "2026-05-20T00:00:00.000Z",
+  "updatedAt": "2026-05-20T00:00:00.000Z",
+  "instruction": "返答は必ず expectedImportFormat と同じ形式の .json ファイルだけにしてください。",
+  "expectedImportFormat": {
+    "clarisImportType": "memo_ai_summary",
+    "version": 1,
+    "memoId": "対象メモID",
+    "title": "対象メモタイトル",
+    "agendas": [],
+    "policies": [],
+    "actions": []
+  }
+}
+```
+
+`instruction` では、外部 LLM の返答を必ず `.json` ファイルとし、説明文、補足文、Markdown、コードブロックを含めないことを明記する。`agendas` / `policies` / `actions` は文字列配列のみ許可する。
+
+### 3.2 AI 整理結果インポート JSON
 
 外部 LLM から手動で貼り付ける JSON は次の形式だけを許可する。
 
@@ -81,7 +112,7 @@
 - `policies` -> 内部キー `decisions`
 - `actions` -> 内部キー `nextActions`
 
-表示ラベルは「議題」「方針」「行動」に統一する。既存内容がある場合は上書き確認を出し、取り込み成功時は通常のメモ保存と同じ経路で `updatedAt` と同期メタ情報を更新する。
+表示ラベルは「議題」「方針」「行動」に統一する。反映時は議題の各行に `■`、方針の各行に `●`、行動の各行に `・` を付ける。文章は文末に `。` がなければ補い、単語だけの項目には無理に句点を付けない。既存内容がある場合は上書き確認を出し、取り込み成功時は通常のメモ保存と同じ経路で `updatedAt` と同期メタ情報を更新する。
 
 ## 4. 最小同期 API 案
 

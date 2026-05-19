@@ -932,12 +932,6 @@ textarea {
   backdrop-filter: blur(12px);
 }
 
-.classify-status {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
 .choice-grid {
   display: grid;
   gap: 8px;
@@ -1117,6 +1111,85 @@ textarea {
 
 .memo-ai-import-status.is-success {
   color: var(--green);
+}
+
+.memo-textarea-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.memo-textarea-shell textarea {
+  padding-right: 48px;
+  padding-bottom: 46px;
+}
+
+.memo-expandable-field textarea {
+  transition: min-height 180ms ease, box-shadow 150ms ease;
+}
+
+.memo-expandable-field.is-expanded textarea {
+  min-height: min(44dvh, 420px);
+  box-shadow: inset 0 0 0 1px rgba(31, 52, 48, 0.18);
+}
+
+.memo-expandable-field-large.is-expanded textarea {
+  min-height: min(52dvh, 500px);
+}
+
+.memo-field-resize-button {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 6px 14px rgba(20, 25, 24, 0.08);
+}
+
+.memo-field-resize-button::before,
+.memo-field-resize-button::after,
+.memo-field-resize-button span::before,
+.memo-field-resize-button span::after {
+  content: "";
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-color: var(--green);
+  border-style: solid;
+}
+
+.memo-field-resize-button::before {
+  top: 8px;
+  left: 8px;
+  border-width: 2px 0 0 2px;
+}
+
+.memo-field-resize-button::after {
+  right: 8px;
+  bottom: 8px;
+  border-width: 0 2px 2px 0;
+}
+
+.memo-field-resize-button span::before {
+  top: 8px;
+  right: 8px;
+  border-width: 2px 2px 0 0;
+}
+
+.memo-field-resize-button span::after {
+  left: 8px;
+  bottom: 8px;
+  border-width: 0 0 2px 2px;
+}
+
+.memo-expandable-field.is-expanded .memo-field-resize-button::before,
+.memo-expandable-field.is-expanded .memo-field-resize-button::after,
+.memo-expandable-field.is-expanded .memo-field-resize-button span::before,
+.memo-expandable-field.is-expanded .memo-field-resize-button span::after {
+  width: 7px;
+  height: 7px;
 }
 
 .memo-card h3,
@@ -1570,23 +1643,28 @@ audio {
   gap: 8px;
 }
 
+.task-picker-toggle,
 .memo-picker-toggle {
   width: 100%;
 }
 
+.task-picker-toggle .section-count,
 .memo-picker-toggle .section-count {
   margin-left: auto;
 }
 
+.task-picker-summary,
 .memo-picker-summary {
   margin: 0;
 }
 
+.task-picker-body,
 .memo-picker-body {
   display: grid;
   gap: 8px;
 }
 
+.task-picker-body.is-collapsed,
 .memo-picker-body.is-collapsed {
   display: none;
 }

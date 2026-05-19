@@ -1,6 +1,6 @@
 # Claris 開発ルール
 
-更新日: 2026-05-19  
+更新日: 2026-05-20  
 対象: `Claris_app`
 
 この文書は、今後 Claris を Codex で開発するときの標準ルールである。
@@ -27,6 +27,8 @@
 - 依存関係を勝手に追加しない。
 - 実装前に docs と実装方針を矛盾させない。
 - PWA 本体に秘密情報や認証トークンを置かない。
+- 設定画面に外部 LLM エンドポイントや連携名を復活させない。
+- PWA 本体から外部 LLM へ直接 POST する処理を追加しない。
 
 ## 3. PWA に関するルール
 
@@ -74,8 +76,9 @@
 ## 7. API に関するルール
 
 - 現行 `server.mjs` は静的配信と確認 API のみとする。
-- メモ AI 整理結果取り込みは、当面サーバー API や Claris 内 AI 処理を追加せず、外部 LLM の JSON 回答を手動貼り付けまたは `.json` ファイル選択で検証する導線に留める。
+- メモ AI 整理は、当面サーバー API や Claris 内 AI 処理を追加せず、AI 整理用 `.json` ファイル共有と、外部 LLM の JSON 回答を手動貼り付けまたは `.json` ファイル選択で検証する導線に留める。
 - `memo_ai_summary` 取り込みでは `clarisImportType`、`version`、`memoId`、`agendas` / `policies` / `actions` の文字列配列を必ず検証し、検証失敗時は保存データを変更しない。
+- AI 整理結果の反映では内部キー `agenda`、`decisions`、`nextActions` を維持し、表示上の項目記号 `■`、`●`、`・` と必要な句点補完だけを行う。
 - 同期 API を追加する前に `api-spec.md` を更新する。
 - 最小 API 案は `GET /api/sync/pull`、`POST /api/sync/push`、`POST /api/backup`、`GET /api/backup`、`POST /api/restore` とする。
 - API 実装時も Express / SQLite / Drizzle ORM を最初から前提にしない。

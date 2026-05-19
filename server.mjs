@@ -14,7 +14,7 @@ const plannedCapabilities = {
   aiSecretary: {
     label: "AI秘書化",
     status: "planned",
-    serverRole: "予定・メモ・タスクの整理要求を受け付け、外部LLM認証情報を端末へ出さずに中継"
+    serverRole: "現時点では未使用。Claris本体はAI処理や外部LLMへの直接POSTを行わず、JSONファイル共有と取り込み検証に留める"
   },
   residentVoice: {
     label: "音声常駐",

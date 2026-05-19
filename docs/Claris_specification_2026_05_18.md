@@ -83,10 +83,10 @@
 
 - 表示ラベルは「議題」「方針」「行動」。
 - 内部キーは互換性のため `agenda`、`decisions`、`nextActions` を維持する。
-- 保存済みメモの AI整理連携は `createMemoAiExportPrompt(memo)`、`parseMemoAiImportJson(text)`、`validateMemoAiImport(data, currentMemoId)`、`applyMemoAiSummaryToMemo(memo, summary)` に分離する。
-- AI整理エクスポートは現在のメモ ID、タイトル、本文、文字起こし、作成日時、更新日時を含むプロンプトをクリップボードへコピーする。Claris 内では AI 処理を実行しない。
+- 保存済みメモの AI整理連携は `createMemoAiExportPayload(memo)`、`parseMemoAiImportJson(text)`、`validateMemoAiImport(data, currentMemoId)`、`applyMemoAiSummaryToMemo(memo, summary)` に分離する。
+- AI整理エクスポートは現在のメモ ID、タイトル、本文、文字起こし、作成日時、更新日時、LLM への指示、期待する取り込み形式を含む `.json` ファイルを共有またはダウンロードする。Claris 内では AI 処理を実行しない。
 - AI整理インポートは JSON 貼り付けまたは `.json` ファイル選択に対応し、`clarisImportType === "memo_ai_summary"`、`version === 1`、現在のメモ ID と一致する `memoId`、文字列配列の `agendas` / `policies` / `actions` を要求する。
-- 取り込み成功時は `agendas` を `agenda`、`policies` を `decisions`、`actions` を `nextActions` へ改行区切りで保存し、`updatedAt` と同期メタ情報を通常のメモ更新と同じ経路で更新する。
+- 取り込み成功時は `agendas` を `agenda`、`policies` を `decisions`、`actions` を `nextActions` へ保存し、議題に `■`、方針に `●`、行動に `・` を付ける。`updatedAt` と同期メタ情報は通常のメモ更新と同じ経路で更新する。
 - 既存の `agenda`、`decisions`、`nextActions` のいずれかに入力がある場合は、保存前に上書き確認を表示する。
 - 録音中の文字起こしは `app.recordingTranscript`、`app.recordingInterimTranscript`、`app.pendingRecordingTranscript`、`data-recording-transcript-draft` で保持する。
 - `saveQuickMemo()` と `handleMemoSubmit()` は `appendUniqueText()` で文字起こしを重複なく保存する。メモフォーム保存は `saveMemoFromForm()` を通す。
@@ -145,16 +145,16 @@
 - フォーム右上の×または外部タップで未保存データがなければ、`returnToPreviousDialog()` で追加種別選択画面へ戻る。
 - 未保存データがある場合は従来通り保存、破棄、戻るを確認し、破棄を選ぶと追加種別選択画面へ戻る。
 
-## 12. LLM 自動判定仕様
+## 12. AI 整理仕様
 
-- `classifyMemoForm()` は判定中にボタンを disabled にし、ステータスを表示する。
-- `requestExternalMemoClassification()` は `provider`、`task`、`input`、`schema` を JSON POST する。
-- 戻り値は英語キーと日本語キーを両方受け付ける。
-- 静的 PWA 単体では、アプリ終了後も処理を継続するジョブ実行は仕様対象外とし、バックエンド追加時の拡張点とする。
+- `classifyMemoForm()` と `requestExternalMemoClassification()` は廃止済み。
+- Claris 本体は外部 LLM へ直接 POST せず、自動判定ボタンも表示しない。
+- AI 整理は JSON ファイル共有と、`memo_ai_summary` JSON の取り込み検証だけを仕様対象とする。
+- 静的 PWA 単体では、アプリ終了後も処理を継続するジョブ実行は仕様対象外とし、将来必要になった場合も標準4ファイルで影響範囲を整理してから扱う。
 
 ## 13. キャッシュ仕様
 
-- Service Worker キャッシュ名は `claris-cache-v35`。
+- Service Worker キャッシュ名は `claris-cache-v36`。
 - `index.html` と `data/` は network first、その他静的アセットは cache first とする。
 
 ## 14. 小型サーバー準備仕様

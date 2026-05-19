@@ -3,7 +3,7 @@
 
   const DB_NAME = "claris-local-db";
   const DB_VERSION = 2;
-  const APP_VERSION = "2026.05.19-additional-requirements";
+  const APP_VERSION = "2026.05.20-memo-ai-json-share";
   const STATE_SCHEMA_VERSION = 2;
   const STORE = "app";
   const BACKUP_STORE = "backups";
@@ -58,6 +58,7 @@
     decisions: "方針",
     nextActions: "行動"
   };
+  const MEMO_AI_EXPORT_TYPE = "memo_ai_summary_request";
   const MEMO_AI_IMPORT_TYPE = "memo_ai_summary";
   const MEMO_AI_IMPORT_VERSION = 1;
   const LEGACY_AGENDA_LABEL = "\u8ad6\u70b9";
@@ -137,6 +138,7 @@
     pendingCloseRequest: null,
     pendingPolicySave: null,
     pendingMemoAiImport: null,
+    dialogScrollRestore: null,
     settingsDrag: null,
     calendarInitialSelectionPending: true,
     isComposingText: false,
@@ -179,10 +181,10 @@
     document.addEventListener("submit", handleSubmit);
     entityDialog.addEventListener("cancel", handleDialogCancel);
     conflictDialog.addEventListener("cancel", handleDialogCancel);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") stopAudioCaptureImmediately();
-    });
-    window.addEventListener("resize", () => updateNavIndicator());
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("orientationchange", handleViewportChange);
+    window.visualViewport?.addEventListener("resize", handleViewportChange);
     window.addEventListener("pagehide", stopAudioCaptureImmediately);
   }
 
@@ -276,6 +278,8 @@
     app.state.schemaVersion = STATE_SCHEMA_VERSION;
     app.state.settings = app.state.settings || {};
     if (!app.state.settings.deviceId) app.state.settings.deviceId = generateDeviceId();
+    delete app.state.settings.llmProvider;
+    delete app.state.settings.llmEndpoint;
     app.state.updatedAt = nowIso();
     await dbPut(STATE_KEY, app.state);
   }
@@ -343,8 +347,6 @@
         showCompleted: true,
         showLinkedMemos: true,
         policyTypes: [...defaultPolicyTypes],
-        llmProvider: "",
-        llmEndpoint: "",
         appliedTaskImportId: ""
       },
       ui: {
@@ -403,6 +405,8 @@
     merged.settings.policyTypes = normalizePolicyTypes(merged.settings.policyTypes);
     if (!merged.ui.todayMetricsUserSet) merged.ui.todayMetricsOpen = false;
     delete merged.settings["color" + "VisionMode"];
+    delete merged.settings.llmProvider;
+    delete merged.settings.llmEndpoint;
     merged.deletedItems = merged.deletedItems.map((item) => normalizeDeletedItem(item, metadataDefaults));
     return merged;
   }
@@ -593,6 +597,7 @@
   }
 
   function render() {
+    const dialogScrollState = captureDialogScrollState();
     const activeTab = normalizeActiveTab(app.state.ui.activeTab || "today");
     app.state.ui.activeTab = activeTab;
     viewTitle.textContent = tabs[activeTab] || "今日";
@@ -602,6 +607,7 @@
     if (activeTab === "calendar") renderCalendarView();
     if (activeTab === "today") renderTodayView();
     if (activeTab === "entries") renderEntriesView();
+    restoreDialogScrollState(dialogScrollState);
   }
 
   function renderNav(activeTab) {
@@ -1374,6 +1380,11 @@
     }
     closeTaskDateCalendarFromOutsideClick(event);
 
+    if (!app.state) {
+      if (event.target.closest("[data-tab], [data-action], [data-card-action]")) showToast("読み込み中です。");
+      return;
+    }
+
     const tabButton = event.target.closest("[data-tab]");
     if (tabButton) {
       const nextTab = normalizeActiveTab(tabButton.dataset.tab);
@@ -1432,6 +1443,8 @@
     if (action === "apply-task-time") applyTaskTime(button);
     if (action === "clear-task-time") clearTaskTime(button);
     if (action === "toggle-task-memo-picker") toggleTaskMemoPicker(button);
+    if (action === "toggle-memo-task-picker") toggleMemoTaskPicker(button);
+    if (action === "toggle-memo-field-expand") toggleMemoFieldExpansion(button);
     if (action === "toggle-task") await toggleTask(id, button.dataset.date || "");
     if (action === "move-today") await moveTaskToToday(id);
     if (action === "assign-today-priority") await assignTaskToToday(id, button.dataset.priority);
@@ -1443,8 +1456,7 @@
     }
     if (action === "delete-memo") await deleteMemo(id);
     if (action === "delete-policy") await deleteEntity("policies", id, "運営情報を削除しました");
-    if (action === "classify-memo-form") await classifyMemoForm();
-    if (action === "copy-memo-ai-prompt") await copyMemoAiPrompt();
+    if (action === "share-memo-ai-json") await shareMemoAiJson();
     if (action === "toggle-memo-ai-import") toggleMemoAiImportPanel();
     if (action === "hide-memo-ai-import") hideMemoAiImportPanel();
     if (action === "import-memo-ai-summary") await importMemoAiSummaryFromPanel();
@@ -1480,6 +1492,48 @@
     if (shell?.scrollIntoView) shell.scrollIntoView({ block: "start", behavior: "smooth" });
     window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
     view?.focus?.({ preventScroll: true });
+  }
+
+  function handleVisibilityChange() {
+    const scrollState = captureDialogScrollState();
+    if (document.visibilityState === "hidden") stopAudioCaptureImmediately();
+    restoreDialogScrollState(scrollState);
+  }
+
+  function handleViewportChange() {
+    const scrollState = captureDialogScrollState();
+    updateNavIndicator();
+    restoreDialogScrollState(scrollState);
+  }
+
+  function captureDialogScrollState(dialog = entityDialog) {
+    const target = dialog?.open ? dialog : (entityDialog.open ? entityDialog : (conflictDialog.open ? conflictDialog : null));
+    const sheet = target?.querySelector(".sheet");
+    if (!target || !sheet) return null;
+    return {
+      dialogId: target.id || "",
+      formId: target.querySelector("form")?.id || "",
+      entityId: target.querySelector("form")?.dataset.id || "",
+      scrollTop: sheet.scrollTop || 0
+    };
+  }
+
+  function restoreDialogScrollState(state) {
+    if (!state) return;
+    app.dialogScrollRestore = state;
+    requestAnimationFrame(() => {
+      const pending = app.dialogScrollRestore;
+      app.dialogScrollRestore = null;
+      if (!pending) return;
+      const dialog = pending.dialogId === "conflictDialog" ? conflictDialog : entityDialog;
+      const form = dialog.querySelector("form");
+      const sheet = dialog.open ? dialog.querySelector(".sheet") : null;
+      if (!sheet) return;
+      if (pending.formId && form?.id !== pending.formId) return;
+      if (pending.entityId && form?.dataset.id !== pending.entityId) return;
+      const maxScroll = Math.max(0, sheet.scrollHeight - sheet.clientHeight);
+      sheet.scrollTop = clampNumber(pending.scrollTop, 0, maxScroll, 0);
+    });
   }
 
   function handleKeydown(event) {
@@ -1543,6 +1597,10 @@
     }
     if (event.target.name === "memoIds") {
       updateMemoPickerSummary(event.target.closest(".memo-picker"));
+      return;
+    }
+    if (event.target.name === "taskIds") {
+      updateTaskPickerSummary(event.target.closest(".task-picker"));
       return;
     }
     if (event.target.id === "conflictMoveDate" || event.target.id === "conflictMovePriority") {
@@ -1930,28 +1988,19 @@
             <input type="hidden" data-recording-transcript-draft value="">
             <div class="transcript-preview hidden" data-recording-transcript-preview aria-live="polite"></div>
           </section>
-          <div class="field">
-            <label for="memoBody">本文</label>
-            <textarea id="memoBody" name="body" required>${escapeHtml(value.body)}</textarea>
-          </div>
-          <div class="toolbar">
-            <button class="ghost-button compact" type="button" data-action="classify-memo-form">自動判定</button>
-            <span class="classify-status" data-classify-status></span>
-          </div>
+          ${renderExpandableMemoField({
+            id: "memoBody",
+            name: "body",
+            label: "本文",
+            value: value.body,
+            required: true,
+            large: true
+          })}
           ${existing ? renderMemoAiTools(value) : ""}
           <div class="field-inline">
-            <div class="field">
-              <label for="memoAgenda">${memoFieldLabels.agenda}</label>
-              <textarea id="memoAgenda" name="agenda">${escapeHtml(value.agenda)}</textarea>
-            </div>
-            <div class="field">
-              <label for="memoDecisions">${memoFieldLabels.decisions}</label>
-              <textarea id="memoDecisions" name="decisions">${escapeHtml(value.decisions)}</textarea>
-            </div>
-            <div class="field">
-              <label for="memoNextActions">${memoFieldLabels.nextActions}</label>
-              <textarea id="memoNextActions" name="nextActions">${escapeHtml(value.nextActions)}</textarea>
-            </div>
+            ${renderExpandableMemoField({ id: "memoAgenda", name: "agenda", label: memoFieldLabels.agenda, value: value.agenda })}
+            ${renderExpandableMemoField({ id: "memoDecisions", name: "decisions", label: memoFieldLabels.decisions, value: value.decisions })}
+            ${renderExpandableMemoField({ id: "memoNextActions", name: "nextActions", label: memoFieldLabels.nextActions, value: value.nextActions })}
           </div>
           ${value.recordings.length ? `
             <div class="field">
@@ -1965,10 +2014,7 @@
               <select id="memoDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
             </div>
           </div>
-          <div class="field">
-            <label for="memoTasks">関連タスク</label>
-            ${renderTaskPicker(value.taskIds)}
-          </div>
+          ${renderTaskPicker(value.taskIds)}
           <details class="transcript-details">
             <summary><span class="transcript-summary-mark" aria-hidden="true"></span><span>文字起こし</span></summary>
             <div class="field">
@@ -1987,6 +2033,23 @@
     markDialogFormsPristine(entityDialog);
   }
 
+  function renderExpandableMemoField(options) {
+    const required = options.required ? " required" : "";
+    const placeholder = options.placeholder ? ` placeholder="${escapeAttr(options.placeholder)}"` : "";
+    const largeClass = options.large ? " memo-expandable-field-large" : "";
+    return `
+      <div class="field memo-expandable-field${largeClass}" data-memo-expandable-field>
+        <label for="${escapeAttr(options.id)}">${escapeHtml(options.label)}</label>
+        <div class="memo-textarea-shell">
+          <textarea id="${escapeAttr(options.id)}" name="${escapeAttr(options.name)}"${required}${placeholder}>${escapeHtml(options.value || "")}</textarea>
+          <button class="memo-field-resize-button" type="button" data-action="toggle-memo-field-expand" aria-label="${escapeAttr(options.label)}を拡張" aria-pressed="false">
+            <span aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
   function renderMemoAiTools(memo) {
     return `
       <section class="memo-ai-panel">
@@ -1995,7 +2058,7 @@
           ${memo.aiStatus === "completed" ? `<span class="status-pill memo-ai-status">取込済み</span>` : ""}
         </div>
         <div class="toolbar memo-ai-actions">
-          <button class="ghost-button compact" type="button" data-action="copy-memo-ai-prompt">AI整理用にコピー</button>
+          <button class="ghost-button compact" type="button" data-action="share-memo-ai-json">AI整理用JSONを共有</button>
           <button class="ghost-button compact" type="button" data-action="toggle-memo-ai-import">AI整理結果を取り込む</button>
         </div>
         <div class="memo-ai-import-panel" data-memo-ai-import-panel hidden>
@@ -3154,167 +3217,95 @@
     return JSON.parse(JSON.stringify(item));
   }
 
-  async function classifyMemoForm() {
-    const form = document.getElementById("memoForm");
-    if (!form) return;
-    const title = String(form.elements.title?.value || "");
-    const body = String(form.elements.body?.value || "");
-    const transcript = String(form.elements.transcript?.value || "");
-    const source = [title, body, transcript].filter(Boolean).join("\n");
-    if (!source.trim()) {
-      showToast("判定するタイトル、本文、文字起こしを入力してください。");
-      return;
-    }
-    const button = form.querySelector('[data-action="classify-memo-form"]');
-    const status = form.querySelector("[data-classify-status]");
-    if (button) button.disabled = true;
-    if (status) status.textContent = "判定中";
-    try {
-      const organized = await classifyMemoText(source);
-      if (!form.isConnected) {
-        showToast("判定が完了しました。メモ画面を開き直して確認してください。");
-        return;
-      }
-      if (!form.elements.title.value.trim()) form.elements.title.value = organized.title;
-      form.elements.agenda.value = organized.agenda;
-      form.elements.decisions.value = organized.decisions;
-      form.elements.nextActions.value = organized.nextActions;
-      if (status) status.textContent = "反映済み";
-      showToast("タイトル、本文、文字起こしから議題・方針・行動へ判定しました。");
-    } finally {
-      if (button) button.disabled = false;
-    }
-  }
-
-  async function classifyMemoText(text) {
-    const endpoint = String(app.state.settings.llmEndpoint || "").trim();
-    if (endpoint) {
-      try {
-        const external = await requestExternalMemoClassification(endpoint, text);
-        if (external) return external;
-      } catch (error) {
-        showToast(`外部LLM判定に失敗しました。ローカル判定に切り替えます: ${error.message}`);
-      }
-    }
-    return organizeText(text);
-  }
-
-  async function requestExternalMemoClassification(endpoint, text) {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        provider: app.state.settings.llmProvider || "external",
-        task: "claris.memo.classify",
-        input: text,
-        schema: {
-          title: "string",
-          agenda: memoFieldLabels.agenda,
-          decisions: memoFieldLabels.decisions,
-          nextActions: memoFieldLabels.nextActions
-        }
-      })
-    });
-    if (!response.ok) throw new Error(`${response.status}`);
-    const data = await response.json();
-    const result = data.result && typeof data.result === "object" ? data.result : data;
-    return {
-      title: String(result.title || firstLine(text) || "メモ"),
-      agenda: String(result.agenda || result.issues || result["議題"] || result[LEGACY_AGENDA_LABEL] || ""),
-      decisions: String(result.decisions || result.policy || result["方針"] || ""),
-      nextActions: String(result.nextActions || result.actions || result["行動"] || "")
-    };
-  }
-
-  async function copyMemoAiPrompt() {
+  async function shareMemoAiJson() {
     const form = document.getElementById("memoForm");
     if (!form?.dataset.id) {
       showToast("保存済みメモで利用できます。");
       return;
     }
     const memo = buildMemoDraftFromForm(form, { includeRecordingDrafts: true });
+    const payload = createMemoAiExportPayload(memo);
+    const filename = createMemoAiExportFilename(memo);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     try {
-      await copyTextToClipboard(createMemoAiExportPrompt(memo));
-      showToast("AI整理用プロンプトをコピーしました。");
+      const shared = await shareJsonFile(blob, filename, {
+        title: "Claris AI整理用JSON",
+        text: "ClarisにインポートするためのAI整理用データです。外部LLMアプリへ共有してください。"
+      });
+      showToast(shared ? "AI整理用JSONを共有しました。" : "AI整理用JSONをダウンロードしました。");
     } catch (error) {
-      showToast("クリップボードへコピーできませんでした。");
+      if (error?.name === "AbortError") {
+        showToast("共有をキャンセルしました。");
+        return;
+      }
+      downloadBlob(blob, filename);
+      showToast("共有できないため、AI整理用JSONをダウンロードしました。");
     }
   }
 
-  function createMemoAiExportPrompt(memo) {
-    const responseSchema = {
+  function createMemoAiExportPayload(memo) {
+    const expectedImportFormat = {
       clarisImportType: MEMO_AI_IMPORT_TYPE,
       version: MEMO_AI_IMPORT_VERSION,
-      memoId: "<元メモID>",
-      title: "<元タイトル>",
-      agendas: [
-        "議題1",
-        "議題2"
-      ],
-      policies: [
-        "方針1",
-        "方針2"
-      ],
-      actions: [
-        "行動1",
-        "行動2"
-      ]
+      memoId: memo.id || "",
+      title: memo.title || "",
+      agendas: [],
+      policies: [],
+      actions: []
     };
-    const sourceMemo = {
+    return {
+      clarisExportType: MEMO_AI_EXPORT_TYPE,
+      version: MEMO_AI_IMPORT_VERSION,
       memoId: memo.id || "",
       title: memo.title || "",
       body: memo.body || "",
       transcript: memo.transcript || "",
       createdAt: memo.createdAt || "",
-      updatedAt: memo.updatedAt || ""
+      updatedAt: memo.updatedAt || "",
+      instruction: [
+        "このJSONは、ClarisにインポートするためのAI整理用データです。",
+        "Claris内ではAI処理を実行しません。本文と文字起こしを外部LLMで整理してください。",
+        "返答は必ず expectedImportFormat と同じ形式の .json ファイルだけにしてください。説明文、補足文、Markdown、コードブロックは含めないでください。",
+        "memoId と title は expectedImportFormat の値をそのまま返してください。",
+        "agendas / policies / actions は文字列配列のみ許可します。該当がない項目は空配列 [] にしてください。",
+        "議題は話し合うこと、確認すべきこと、問題として扱うことを入れてください。",
+        "方針は決まった方向性、判断、考え方を入れてください。",
+        "行動は次にやること、担当、期限、具体的な作業を入れてください。",
+        "内容を勝手に作らず、元の意味を変えないでください。"
+      ].join("\n"),
+      expectedImportFormat
     };
-    return [
-      "以下のメモを「議題・方針・行動」に整理してください。",
-      "",
-      "出力は、必ず次のJSON形式のみで返してください。",
-      "説明文、補足文、Markdown、コードブロックは不要です。",
-      "memoId は下の元メモの memoId をそのまま入れてください。",
-      "agendas / policies / actions は文字列配列にしてください。",
-      "",
-      JSON.stringify(responseSchema, null, 2),
-      "",
-      "分類ルール：",
-      "- 議題：話し合うこと、確認すべきこと、問題として扱うこと",
-      "- 方針：決まった方向性、判断、考え方",
-      "- 行動：次にやること、担当、期限、具体的な作業",
-      "- 本文と文字起こしの両方を対象にする",
-      "- 文字起こしにしか含まれない内容も必要に応じて整理する",
-      "- 不明な項目は空配列 [] にする",
-      "- 内容を勝手に作らない",
-      "- 元の意味を変えない",
-      "- できるだけ短く、実務で使いやすい表現にする",
-      "",
-      "元メモ：",
-      JSON.stringify(sourceMemo, null, 2)
-    ].join("\n");
   }
 
-  async function copyTextToClipboard(text) {
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(text);
-        return;
-      } catch (error) {
-        // Fall through to the selection-based copy path for older PWA contexts.
-      }
+  function createMemoAiExportFilename(memo) {
+    const title = sanitizeFilenamePart(memo.title || firstLine(memo.body) || "メモ");
+    return `ClarisにインポートするAI整理用_${todayIso()}_${title}.json`;
+  }
+
+  function sanitizeFilenamePart(value) {
+    return String(value || "")
+      .normalize("NFKC")
+      .replace(/[\\/:*?"<>|]/g, "_")
+      .replace(/\s+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 42) || "メモ";
+  }
+
+  async function shareJsonFile(blob, filename, shareData = {}) {
+    if (typeof File !== "function" || !navigator.share) {
+      downloadBlob(blob, filename);
+      return false;
     }
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.top = "-9999px";
-    document.body.appendChild(textarea);
-    textarea.select();
-    try {
-      if (!document.execCommand("copy")) throw new Error("copy failed");
-    } finally {
-      textarea.remove();
+    const file = new File([blob], filename, { type: "application/json" });
+    if (!navigator.canShare?.({ files: [file] })) {
+      downloadBlob(blob, filename);
+      return false;
     }
+    await navigator.share({
+      ...shareData,
+      files: [file]
+    });
+    return true;
   }
 
   function toggleMemoAiImportPanel() {
@@ -3616,11 +3607,36 @@
   function applyMemoAiSummaryToMemo(memo, summary) {
     return {
       ...memo,
-      agenda: summary.agendas.join("\n"),
-      decisions: summary.policies.join("\n"),
-      nextActions: summary.actions.join("\n"),
+      agenda: formatMemoAiSummaryList(summary.agendas, "■"),
+      decisions: formatMemoAiSummaryList(summary.policies, "●"),
+      nextActions: formatMemoAiSummaryList(summary.actions, "・"),
       aiStatus: "completed"
     };
+  }
+
+  function formatMemoAiSummaryList(items, mark) {
+    return items
+      .map((item) => formatMemoAiSummaryLine(item, mark))
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function formatMemoAiSummaryLine(item, mark) {
+    const text = String(item || "")
+      .replace(/^[\s■●・\-*]+/u, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return "";
+    const body = shouldAppendJapanesePeriod(text) ? `${text}。` : text;
+    return `${mark}${body}`;
+  }
+
+  function shouldAppendJapanesePeriod(text) {
+    const value = String(text || "").trim();
+    if (!value || /[。.!?！？]$/.test(value)) return false;
+    if (/[、，,]/.test(value)) return true;
+    if (value.length >= 12) return true;
+    return /(する|した|します|できる|できない|ない|ある|いる|なる|進める|決める|確認|対応|作成|共有|実施|検討|修正|保存|追加|削除|選択|設定)$/.test(value);
   }
 
   function setMemoAiImportStatus(form, message, isError) {
@@ -4065,19 +4081,6 @@
             </div>
           </section>
           <section class="settings-block">
-            <h2 class="section-title">外部LLM連携準備</h2>
-            <div class="field-inline">
-              <div class="field">
-                <label for="settingsLlmProvider">連携名</label>
-                <input id="settingsLlmProvider" name="llmProvider" value="${escapeAttr(app.state.settings.llmProvider || "")}" autocomplete="off" placeholder="Copilot / Power Automate など">
-              </div>
-              <div class="field">
-                <label for="settingsLlmEndpoint">エンドポイント</label>
-                <input id="settingsLlmEndpoint" name="llmEndpoint" value="${escapeAttr(app.state.settings.llmEndpoint || "")}" autocomplete="off" placeholder="https:// または http://localhost">
-              </div>
-            </div>
-          </section>
-          <section class="settings-block">
             <div class="section-head">
               <h2 class="section-title">データ</h2>
             <div class="card-actions">
@@ -4194,8 +4197,8 @@
     app.state.settings.showCompleted = data.get("showCompleted") === "on";
     app.state.settings.showLinkedMemos = true;
     delete app.state.settings["color" + "VisionMode"];
-    app.state.settings.llmProvider = String(data.get("llmProvider") || "").trim();
-    app.state.settings.llmEndpoint = String(data.get("llmEndpoint") || "").trim();
+    delete app.state.settings.llmProvider;
+    delete app.state.settings.llmEndpoint;
     const previousDepartments = app.state.departments;
     const departmentRows = [...form.querySelectorAll('[data-row="department"]')];
     const nextDepartmentIds = new Set(departmentRows.map((row) => row.dataset.id).filter(Boolean));
@@ -4479,6 +4482,8 @@
         appliedTaskImportId: importId
       };
       delete app.state.settings["color" + "VisionMode"];
+      delete app.state.settings.llmProvider;
+      delete app.state.settings.llmEndpoint;
     }
     const metadataDefaults = { syncStatus: "local-only", deviceId: app.state.settings.deviceId, now };
     app.state.tasks = Array.isArray(payload.tasks) ? payload.tasks.map((task) => normalizeTask(task, metadataDefaults)) : app.state.tasks;
@@ -4734,6 +4739,10 @@
 
   function downloadJson(payload, filename) {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    downloadBlob(blob, filename);
+  }
+
+  function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -5217,31 +5226,51 @@
     const tasks = sortTasksByActionDate(app.state.tasks).sort((a, b) =>
       Number(current.has(b.id)) - Number(current.has(a.id))
     );
+    const selectedCount = [...current].filter((id) => tasks.some((task) => task.id === id)).length;
     return `
-      <div id="memoTasks" class="task-picker">
-        <input id="memoTaskSearch" type="search" data-task-search placeholder="タスク名で検索（漢字・かな・英字）" autocomplete="off">
-        <div class="task-picker-list" data-task-picker-list>
-          ${tasks.map((task) => {
-            const meta = [
-              task.actionDate ? `実施 ${formatShortDate(task.actionDate)}` : "",
-              formatTaskTimeRange(task),
-              task.dueDate ? `DL ${formatShortDate(task.dueDate)}` : "",
-              task.assignee ? `担当 ${task.assignee}` : ""
-            ].filter(Boolean).join(" / ");
-            return `
-              <label class="task-picker-item ${current.has(task.id) ? "is-linked" : ""}" data-search-text="${escapeAttr(normalizeSearchText(`${task.title} ${meta}`))}">
-                <input type="checkbox" name="taskIds" value="${escapeAttr(task.id)}"${current.has(task.id) ? " checked" : ""}>
-                <span>
-                  <strong>${escapeHtml(task.title)}</strong>
-                  ${current.has(task.id) ? `<small>現在紐付け中</small>` : ""}
-                  ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
-                </span>
-              </label>
-            `;
-          }).join("")}
+      <div id="memoTasks" class="task-picker is-collapsed" data-task-picker>
+        <button class="collapse-toggle task-picker-toggle" type="button" data-action="toggle-memo-task-picker" aria-expanded="false">
+          <span class="collapse-mark">+</span>
+          <span class="section-title">関連タスク</span>
+          <span class="section-count" data-task-picker-count>${formatTaskPickerCount(selectedCount)}</span>
+        </button>
+        <p class="form-hint task-picker-summary" data-task-picker-summary>${formatTaskPickerSummary(selectedCount, tasks.length)}</p>
+        <div class="task-picker-body is-collapsed" data-task-picker-body>
+          ${tasks.length ? `
+            <input id="memoTaskSearch" type="search" data-task-search placeholder="タスク名で検索（漢字・かな・英字）" autocomplete="off">
+            <div class="task-picker-list" data-task-picker-list>
+              ${tasks.map((task) => {
+                const meta = [
+                  task.actionDate ? `実施 ${formatShortDate(task.actionDate)}` : "",
+                  formatTaskTimeRange(task),
+                  task.dueDate ? `DL ${formatShortDate(task.dueDate)}` : "",
+                  task.assignee ? `担当 ${task.assignee}` : ""
+                ].filter(Boolean).join(" / ");
+                return `
+                  <label class="task-picker-item ${current.has(task.id) ? "is-linked" : ""}" data-search-text="${escapeAttr(normalizeSearchText(`${task.title} ${meta}`))}">
+                    <input type="checkbox" name="taskIds" value="${escapeAttr(task.id)}"${current.has(task.id) ? " checked" : ""}>
+                    <span>
+                      <strong>${escapeHtml(task.title)}</strong>
+                      ${current.has(task.id) ? `<small>現在紐付け中</small>` : ""}
+                      ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
+                    </span>
+                  </label>
+                `;
+              }).join("")}
+            </div>
+          ` : `<p class="body-preview">関連付けできるタスクはまだありません。</p>`}
         </div>
       </div>
     `;
+  }
+
+  function formatTaskPickerCount(count) {
+    return count ? `${count}件選択` : "未選択";
+  }
+
+  function formatTaskPickerSummary(count, total) {
+    if (!total) return "タスクなし";
+    return count ? `${count}件選択中` : "未選択";
   }
 
   function filterTaskPicker(input) {
@@ -5260,6 +5289,30 @@
     });
   }
 
+  function toggleMemoTaskPicker(button) {
+    const picker = button.closest("[data-task-picker]");
+    const body = picker?.querySelector("[data-task-picker-body]");
+    if (!picker || !body) return;
+    const open = body.classList.contains("is-collapsed");
+    picker.classList.toggle("is-collapsed", !open);
+    body.classList.toggle("is-collapsed", !open);
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    const mark = button.querySelector(".collapse-mark");
+    if (mark) mark.textContent = open ? "-" : "+";
+    if (open) picker.querySelector("[data-task-search]")?.focus();
+  }
+
+  function toggleMemoFieldExpansion(button) {
+    const field = button.closest("[data-memo-expandable-field]");
+    const textarea = field?.querySelector("textarea");
+    if (!field || !textarea) return;
+    const expanded = !field.classList.contains("is-expanded");
+    field.classList.toggle("is-expanded", expanded);
+    button.setAttribute("aria-pressed", expanded ? "true" : "false");
+    button.setAttribute("aria-label", `${field.querySelector("label")?.textContent || "入力欄"}を${expanded ? "元に戻す" : "拡張"}`);
+    textarea.focus({ preventScroll: true });
+  }
+
   function toggleTaskMemoPicker(button) {
     const picker = button.closest("[data-memo-picker]");
     const body = picker?.querySelector("[data-memo-picker-body]");
@@ -5271,6 +5324,17 @@
     const mark = button.querySelector(".collapse-mark");
     if (mark) mark.textContent = open ? "-" : "+";
     if (open) picker.querySelector("[data-memo-search]")?.focus();
+  }
+
+  function updateTaskPickerSummary(picker) {
+    if (!picker) return;
+    const checkboxes = [...picker.querySelectorAll('input[name="taskIds"]')];
+    const count = checkboxes.filter((input) => input.checked).length;
+    const countLabel = picker.querySelector("[data-task-picker-count]");
+    const summary = picker.querySelector("[data-task-picker-summary]");
+    if (countLabel) countLabel.textContent = formatTaskPickerCount(count);
+    if (summary) summary.textContent = formatTaskPickerSummary(count, checkboxes.length);
+    checkboxes.forEach((input) => input.closest(".task-picker-item")?.classList.toggle("is-linked", input.checked));
   }
 
   function updateMemoPickerSummary(picker) {
@@ -5483,25 +5547,6 @@
         markEntityChanged(task, task, now);
       }
     });
-  }
-
-  function organizeText(body) {
-    const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const decisions = [];
-    const nextActions = [];
-    const agenda = [];
-    lines.forEach((line) => {
-      if (/(決定|決ま|することに|方針|で進める)/.test(line)) decisions.push(line);
-      else if (/(→|対応|確認|依頼|作成|送る|提出|DL|まで|次回|やる)/i.test(line)) nextActions.push(line);
-      else if (new RegExp(`(議題|${LEGACY_AGENDA_LABEL}|課題|懸念|確認したい|なぜ|どうする|検討)`).test(line)) agenda.push(line);
-      else agenda.push(line);
-    });
-    return {
-      title: firstLine(body) || "メモ",
-      agenda: agenda.slice(0, 3).join("\n"),
-      decisions: decisions.join("\n"),
-      nextActions: nextActions.join("\n")
-    };
   }
 
   function isDateInPolicy(date, policy) {
