@@ -10,6 +10,7 @@
 - 現行実装を壊さない。
 - 現在動いている静的 PWA 構造を優先する。
 - ローカル保存、オフライン利用、IndexedDB、Service Worker、JSON バックアップ導線を維持する。
+- UI の開閉記号は、表示を `+`、非表示を `-` に統一する。
 - 大きな変更の前には、目的、影響範囲、差分方針を説明する。
 - 実装変更で要件や仕様が変わる場合は、docs も同じタイミングで更新する。
 - 標準入口は `requirements.md`、`architecture.md`、`api-spec.md`、`development-rules.md` とする。
@@ -40,6 +41,8 @@
 - IndexedDB の既存データ構造を不用意に破壊しない。
 - 保存済みデータの互換性を保つため、内部キーの変更は原則避ける。
 - 既存の `createdAt`、`updatedAt` を維持する。
+- タスク関連メモの開閉 UI は保存データ構造に含めない。閉じた状態でも既存の `task.memoIds` とメモ同期処理が失われないよう、保存用 input は維持する。
+- 優先度の色変更では `P1` / `P2` / `P3` / `SUB` の保存値、意味、順序を変更しない。
 - 同期用メタ情報は `deletedAt`、`syncStatus`、`deviceId`、`version` を標準とする。
 - 既存データに同期用メタ情報がない場合は、起動時正規化で `version: 1`、`deletedAt: null`、`syncStatus: "local-only"`、現端末の `deviceId`、不足している `updatedAt` を補完する。
 - 新規作成、編集、削除、復元で変更されたデータは `syncStatus: "pending"` とし、対象データの `version` を `+1` する。新規作成時は `version: 1` とする。
@@ -71,6 +74,8 @@
 ## 7. API に関するルール
 
 - 現行 `server.mjs` は静的配信と確認 API のみとする。
+- メモ AI 整理結果取り込みは、当面サーバー API や Claris 内 AI 処理を追加せず、外部 LLM の JSON 回答を手動貼り付けして検証する導線に留める。
+- `memo_ai_summary` 取り込みでは `clarisImportType`、`version`、`memoId`、`agendas` / `policies` / `actions` の文字列配列を必ず検証し、検証失敗時は保存データを変更しない。
 - 同期 API を追加する前に `api-spec.md` を更新する。
 - 最小 API 案は `GET /api/sync/pull`、`POST /api/sync/push`、`POST /api/backup`、`GET /api/backup`、`POST /api/restore` とする。
 - API 実装時も Express / SQLite / Drizzle ORM を最初から前提にしない。
@@ -81,6 +86,7 @@
 - 日付付き docs は詳細資料として残してよい。
 - 今後も有効な内容は標準4ファイルへ統合する。
 - 古い内容や現在方針と矛盾する内容は、過去資料として明記するか、標準4ファイルには採用しない。
+- 現時点の標準入口は `requirements.md`、`architecture.md`、`api-spec.md`、`development-rules.md` の4ファイルである。日付付き docs は詳細資料、過去資料、引き継ぎ資料として参照し、仕様判断では標準4ファイルを優先する。
 - 実装と docs に食い違いがある場合は、先に差分、矛盾点、判断が必要な点を一覧化する。
 
 ## 9. 次回実装前チェック

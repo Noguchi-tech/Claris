@@ -3,7 +3,7 @@
 
   const DB_NAME = "claris-local-db";
   const DB_VERSION = 2;
-  const APP_VERSION = "2026.05.19-memo-ai-import";
+  const APP_VERSION = "2026.05.19-additional-requirements";
   const STATE_SCHEMA_VERSION = 2;
   const STORE = "app";
   const BACKUP_STORE = "backups";
@@ -138,6 +138,7 @@
     pendingPolicySave: null,
     pendingMemoAiImport: null,
     settingsDrag: null,
+    calendarInitialSelectionPending: true,
     isComposingText: false,
     toastTimer: 0,
     periodToastTimer: 0
@@ -659,7 +660,7 @@
     view.innerHTML = `
       <section class="today-metrics-panel" aria-label="今日">
         <button class="collapse-toggle today-metrics-toggle" type="button" data-action="toggle-today-metrics" aria-expanded="${metricsOpen ? "true" : "false"}">
-          <span class="collapse-mark">${metricsOpen ? "－" : "＋"}</span>
+          <span class="collapse-mark">${metricsOpen ? "-" : "+"}</span>
           <span class="section-title">今日</span>
           <span class="section-count">${todayTasks.length + overdue.length + todayMemos.length + relatedPolicies.length}件</span>
         </button>
@@ -1381,6 +1382,7 @@
         return;
       }
       app.state.ui.activeTab = nextTab;
+      applyInitialCalendarSelection(nextTab);
       await saveState();
       render();
       return;
@@ -1429,6 +1431,7 @@
     if (action === "toggle-task-time-picker") toggleTaskTimePicker(button);
     if (action === "apply-task-time") applyTaskTime(button);
     if (action === "clear-task-time") clearTaskTime(button);
+    if (action === "toggle-task-memo-picker") toggleTaskMemoPicker(button);
     if (action === "toggle-task") await toggleTask(id, button.dataset.date || "");
     if (action === "move-today") await moveTaskToToday(id);
     if (action === "assign-today-priority") await assignTaskToToday(id, button.dataset.priority);
@@ -1534,6 +1537,10 @@
       updateTaskPriorityPreview(event.target.closest("form"));
       return;
     }
+    if (event.target.name === "memoIds") {
+      updateMemoPickerSummary(event.target.closest(".memo-picker"));
+      return;
+    }
     if (event.target.id === "conflictMoveDate" || event.target.id === "conflictMovePriority") {
       updateConflictMovePreview();
       return;
@@ -1613,6 +1620,14 @@
     app.state.ui.entryKind = entryKindMeta[kind] ? kind : "all";
     await saveState();
     render();
+  }
+
+  function applyInitialCalendarSelection(nextTab) {
+    if (nextTab !== "calendar" || !app.calendarInitialSelectionPending) return;
+    const today = todayIso();
+    app.state.ui.selectedDate = today;
+    app.state.ui.calendarMonth = monthKey(dateObject(today));
+    app.calendarInitialSelectionPending = false;
   }
 
   async function toggleTodayMetrics() {
@@ -1830,8 +1845,7 @@
             <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
           </div>
           ${renderRecurrenceFields(value.recurrence)}
-          <div class="field">
-            <label for="taskMemos">関連メモ</label>
+          <div class="field task-memo-field">
             ${renderMemoPicker(value.memoIds)}
             <div class="toolbar">
               ${value.id
@@ -1952,7 +1966,7 @@
             ${renderTaskPicker(value.taskIds)}
           </div>
           <details class="transcript-details">
-            <summary>文字起こし</summary>
+            <summary><span class="transcript-summary-mark" aria-hidden="true"></span><span>文字起こし</span></summary>
             <div class="field">
               <label for="memoTranscript">全文</label>
               <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(value.transcript)}</textarea>
@@ -2109,7 +2123,7 @@
     return `
       <section class="task-time-panel ${hasTime ? "" : "is-collapsed"}" data-task-time-panel>
         <button class="collapse-toggle task-time-toggle" type="button" data-action="toggle-task-time-panel" aria-expanded="${hasTime ? "true" : "false"}">
-          <span class="collapse-mark">${hasTime ? "－" : "＋"}</span>
+          <span class="collapse-mark">${hasTime ? "-" : "+"}</span>
           <span class="section-title">時間</span>
           <span class="section-count" data-task-time-summary>${formatTaskTimeSummary(startTime, endTime)}</span>
         </button>
@@ -2303,7 +2317,7 @@
     panel.classList.toggle("is-collapsed", !open);
     button.setAttribute("aria-expanded", open ? "true" : "false");
     const mark = button.querySelector(".collapse-mark");
-    if (mark) mark.textContent = open ? "－" : "＋";
+    if (mark) mark.textContent = open ? "-" : "+";
     if (!open) closeTaskTimePicker(panel);
   }
 
@@ -3251,6 +3265,8 @@
       "",
       "出力は、必ず次のJSON形式のみで返してください。",
       "説明文、補足文、Markdown、コードブロックは不要です。",
+      "memoId は下の元メモの memoId をそのまま入れてください。",
+      "agendas / policies / actions は文字列配列にしてください。",
       "",
       JSON.stringify(responseSchema, null, 2),
       "",
@@ -3333,11 +3349,59 @@
   }
 
   function parseMemoAiImportJson(text) {
-    try {
-      return JSON.parse(String(text || "").trim());
-    } catch (error) {
-      throw new Error("JSON形式が正しくありません");
+    const source = String(text || "").trim();
+    if (!source) throw new Error("JSON形式が正しくありません");
+    const candidates = getMemoAiJsonCandidates(source);
+    for (const candidate of candidates) {
+      try {
+        return JSON.parse(candidate);
+      } catch (error) {
+        // Try the next safely extracted candidate.
+      }
     }
+    throw new Error("JSON形式が正しくありません");
+  }
+
+  function getMemoAiJsonCandidates(source) {
+    const candidates = [];
+    const addCandidate = (value) => {
+      const candidate = String(value || "").trim();
+      if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+    };
+    addCandidate(source);
+    [...source.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].forEach((match) => addCandidate(match[1]));
+    addCandidate(extractFirstJsonObject(source));
+    return candidates;
+  }
+
+  function extractFirstJsonObject(source) {
+    const start = source.indexOf("{");
+    if (start < 0) return "";
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < source.length; index += 1) {
+      const char = source[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+      if (char === "\"") {
+        inString = true;
+      } else if (char === "{") {
+        depth += 1;
+      } else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return source.slice(start, index + 1);
+      }
+    }
+    return "";
   }
 
   function validateMemoAiImport(data, currentMemoId) {
@@ -3350,15 +3414,14 @@
     if (String(data.memoId || "") !== String(currentMemoId || "")) {
       throw new Error("このメモ用のAI整理結果ではありません");
     }
-    const agendas = Array.isArray(data.agendas) ? data.agendas : data.topics;
-    const fields = [agendas, data.policies, data.actions];
+    const fields = [data.agendas, data.policies, data.actions];
     if (!fields.every((items) => Array.isArray(items) && items.every((item) => typeof item === "string"))) {
       throw new Error("議題・方針・行動の形式が正しくありません");
     }
     return {
       memoId: String(data.memoId),
       title: String(data.title || ""),
-      agendas: normalizeMemoAiSummaryItems(agendas),
+      agendas: normalizeMemoAiSummaryItems(data.agendas),
       policies: normalizeMemoAiSummaryItems(data.policies),
       actions: normalizeMemoAiSummaryItems(data.actions)
     };
@@ -3866,7 +3929,7 @@
           <section class="settings-block settings-collapsible">
             <div class="section-head">
               <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="departmentRows" aria-expanded="false">
-                <span class="collapse-mark">＋</span>
+                <span class="collapse-mark">+</span>
                 <span class="section-title">${CLASSIFICATION_LABEL}</span>
                 <span class="section-count">${app.state.departments.length}件</span>
               </button>
@@ -3879,7 +3942,7 @@
           <section class="settings-block settings-collapsible">
             <div class="section-head">
               <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="policyTypeRows" aria-expanded="false">
-                <span class="collapse-mark">＋</span>
+                <span class="collapse-mark">+</span>
                 <span class="section-title">運営情報の種別</span>
                 <span class="section-count">${getPolicyTypes().length}件</span>
               </button>
@@ -3921,7 +3984,7 @@
           <section class="settings-block settings-collapsible">
             <div class="section-head">
               <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="deletedRows" aria-expanded="false">
-                <span class="collapse-mark">＋</span>
+                <span class="collapse-mark">+</span>
                 <span class="section-title">削除済み</span>
                 <span class="section-count">${app.state.deletedItems.length}件</span>
               </button>
@@ -4010,7 +4073,7 @@
     target.classList.toggle("is-collapsed", !open);
     button.setAttribute("aria-expanded", open ? "true" : "false");
     const mark = button.querySelector(".collapse-mark");
-    if (mark) mark.textContent = open ? "－" : "＋";
+    if (mark) mark.textContent = open ? "-" : "+";
   }
 
   async function handleSettingsSubmit(form) {
@@ -4988,28 +5051,47 @@
       Number(current.has(b.id)) - Number(current.has(a.id)) ||
       String(b.updatedAt).localeCompare(String(a.updatedAt))
     );
-    if (!memos.length) return `<p class="body-preview">関連付けできるメモはまだありません。</p>`;
+    const selectedCount = [...current].filter((id) => memos.some((memo) => memo.id === id)).length;
     return `
-      <div class="memo-picker">
-        <input id="taskMemoSearch" type="search" data-memo-search placeholder="メモを検索（漢字・かな・英字）" autocomplete="off">
-        <div class="memo-picker-list" data-memo-picker-list>
-          ${memos.map((memo) => {
-            const preview = truncate(getMemoPreviewText(memo), 120);
-            const searchText = normalizeSearchText([memo.title, memo.body, memo.transcript, memo.agenda, memo.decisions, memo.nextActions].filter(Boolean).join(" "));
-            return `
-              <label class="memo-picker-item ${current.has(memo.id) ? "is-linked" : ""}" data-search-text="${escapeAttr(searchText)}">
-                <input type="checkbox" name="memoIds" value="${escapeAttr(memo.id)}"${current.has(memo.id) ? " checked" : ""}>
-                <span>
-                  <strong>${escapeHtml(memo.title || "メモ")}</strong>
-                  ${current.has(memo.id) ? `<small>現在紐付け中</small>` : ""}
-                  ${preview ? `<small>${escapeHtml(preview)}</small>` : ""}
-                </span>
-              </label>
-            `;
-          }).join("")}
+      <div class="memo-picker is-collapsed" data-memo-picker>
+        <button class="collapse-toggle memo-picker-toggle" type="button" data-action="toggle-task-memo-picker" aria-expanded="false">
+          <span class="collapse-mark">+</span>
+          <span class="section-title">関連メモ</span>
+          <span class="section-count" data-memo-picker-count>${formatMemoPickerCount(selectedCount)}</span>
+        </button>
+        <p class="form-hint memo-picker-summary" data-memo-picker-summary>${formatMemoPickerSummary(selectedCount, memos.length)}</p>
+        <div class="memo-picker-body is-collapsed" data-memo-picker-body>
+          ${memos.length ? `
+            <input id="taskMemoSearch" type="search" data-memo-search placeholder="メモを検索（漢字・かな・英字）" autocomplete="off">
+            <div class="memo-picker-list" data-memo-picker-list>
+              ${memos.map((memo) => {
+                const preview = truncate(getMemoPreviewText(memo), 120);
+                const searchText = normalizeSearchText([memo.title, memo.body, memo.transcript, memo.agenda, memo.decisions, memo.nextActions].filter(Boolean).join(" "));
+                return `
+                  <label class="memo-picker-item ${current.has(memo.id) ? "is-linked" : ""}" data-search-text="${escapeAttr(searchText)}">
+                    <input type="checkbox" name="memoIds" value="${escapeAttr(memo.id)}"${current.has(memo.id) ? " checked" : ""}>
+                    <span>
+                      <strong>${escapeHtml(memo.title || "メモ")}</strong>
+                      ${current.has(memo.id) ? `<small>現在紐付け中</small>` : ""}
+                      ${preview ? `<small>${escapeHtml(preview)}</small>` : ""}
+                    </span>
+                  </label>
+                `;
+              }).join("")}
+            </div>
+          ` : `<p class="body-preview">関連付けできるメモはまだありません。</p>`}
         </div>
       </div>
     `;
+  }
+
+  function formatMemoPickerCount(count) {
+    return count ? `${count}件選択` : "未選択";
+  }
+
+  function formatMemoPickerSummary(count, total) {
+    if (!total) return "メモなし";
+    return count ? `${count}件選択中` : "未選択";
   }
 
   function renderTaskOptions(currentIds) {
@@ -5064,6 +5146,30 @@
       const matches = normalizedSearchTextMatches(item.dataset.searchText || "", input.value);
       item.classList.toggle("hidden", !matches);
     });
+  }
+
+  function toggleTaskMemoPicker(button) {
+    const picker = button.closest("[data-memo-picker]");
+    const body = picker?.querySelector("[data-memo-picker-body]");
+    if (!picker || !body) return;
+    const open = body.classList.contains("is-collapsed");
+    picker.classList.toggle("is-collapsed", !open);
+    body.classList.toggle("is-collapsed", !open);
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    const mark = button.querySelector(".collapse-mark");
+    if (mark) mark.textContent = open ? "-" : "+";
+    if (open) picker.querySelector("[data-memo-search]")?.focus();
+  }
+
+  function updateMemoPickerSummary(picker) {
+    if (!picker) return;
+    const checkboxes = [...picker.querySelectorAll('input[name="memoIds"]')];
+    const count = checkboxes.filter((input) => input.checked).length;
+    const countLabel = picker.querySelector("[data-memo-picker-count]");
+    const summary = picker.querySelector("[data-memo-picker-summary]");
+    if (countLabel) countLabel.textContent = formatMemoPickerCount(count);
+    if (summary) summary.textContent = formatMemoPickerSummary(count, checkboxes.length);
+    checkboxes.forEach((input) => input.closest(".memo-picker-item")?.classList.toggle("is-linked", input.checked));
   }
 
   function selected(current, value) {

@@ -76,7 +76,26 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 
 `lastFullSyncBackup` または `lastTaskImportBackup` は旧来の一時退避であり、正式な世代バックアップとして扱わない。
 
-## 5. 同期設計の基本方針
+## 5. 現行 UI 設計
+
+- 開閉 UI の記号は `+` を表示、`-` を非表示に統一する。
+- メモ編集画面の文字起こしは `details.transcript-details` を使い、保存済み文字起こし、録音、ドラフト保持の処理は既存経路を維持する。
+- タスクフォームの関連メモ選択は `renderMemoPicker()` で描画し、検索欄と一覧を折りたたみ body に入れる。折りたたみは一時的な UI 状態であり、`task.memoIds`、`syncMemoLinksForTask()`、`syncTaskLinksForMemo()` の保存仕様は変更しない。
+- 関連メモ検索はタイトル、本文、文字起こし、議題、方針、行動を対象にし、`normalizeSearchText()` の表記揺れ吸収を使う。
+- 優先タスクカードと優先度表示の色は、`P1` 赤、`P2` 黄、`P3` 青、`SUB` 緑系とする。保存値と優先順は `P1`、`P2`、`P3`、`SUB` のまま維持する。
+- アプリ起動直後の初回カレンダータブ表示では、ローカル日付の今日を `ui.selectedDate` と `ui.calendarMonth` に反映する。これは起動中だけの初回処理であり、ユーザーが日付を選んだ後の再訪では選択状態を戻さない。
+
+## 6. AI整理結果取り込み設計
+
+メモ AI 整理は Claris 内で AI 処理を実行せず、保存済みメモの「AI整理用にコピー」で外部 LLM 用プロンプトを作り、外部 LLM の JSON 回答を手動で貼り付けて取り込む。
+
+- `parseMemoAiImportJson(text)` は、純粋な JSON、JSON コードブロック、前後に説明文が混じるテキストから安全に単一 JSON オブジェクトを抽出できる場合だけ解析する。抽出が曖昧な場合は取り込まない。
+- `validateMemoAiImport(data, currentMemoId)` は `clarisImportType === "memo_ai_summary"`、`version === 1`、現在開いているメモ ID と一致する `memoId`、`agendas` / `policies` / `actions` が文字列配列であることを要求する。`title` は必須条件にしない。
+- `applyMemoAiSummaryToMemo(memo, summary)` は `agendas` を `agenda`、`policies` を `decisions`、`actions` を `nextActions` へ改行区切りで反映する。
+- 反映時は `saveMemoFromForm()` を通し、通常のメモ更新と同じ `updatedAt`、`syncStatus`、`version` 更新を行う。
+- 既存の整理欄がある場合は上書き確認を挟み、キャンセル時や検証失敗時は保存データを変更しない。
+
+## 7. 同期設計の基本方針
 
 初期段階ではローカル優先の同期方式とする。
 
@@ -87,7 +106,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 - 同期失敗時にローカル編集内容を消さない。
 - 同期処理の前には必ずバックアップを作成する。
 
-## 6. 同期対象コレクション
+## 8. 同期対象コレクション
 
 初期同期対象:
 
@@ -107,7 +126,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 
 `settings` は全体を無条件同期すると端末固有設定を巻き込みやすい。初期段階では分類、種別、同期に必要な項目に限定する。
 
-## 7. 同期用データメタ情報
+## 9. 同期用データメタ情報
 
 将来の同期対象データには次を持たせる。
 
@@ -127,7 +146,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 
 `deletedItems` は現行の復元 UI を壊さないため継続利用する。削除時はアクティブ配列から取り除き、`deletedItems[]` の退避レコードと退避された元データの両方に `deletedAt` を付与する。将来の同期では、この退避レコードを削除トゥームストーンとして扱い、復元時は元データの `deletedAt` を `null` に戻して `pending` とする。
 
-## 8. バックアップ設計
+## 10. バックアップ設計
 
 同期前バックアップは、IndexedDB の state 全体を JSON スナップショットとして保存する。録音 Blob は既存エクスポートと同じく `blobOmitted: true` として省略する。
 
@@ -155,7 +174,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 3. 復元日時を記録する。
 4. 復元されたデータを次回同期でサーバーへ反映できるよう `syncStatus` を調整する。
 
-## 9. 初期同期フロー
+## 11. 初期同期フロー
 
 アプリ起動時の将来フロー:
 
@@ -170,7 +189,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 
 現行起動フローは `applyBundledTaskImport()` による同梱 JSON 反映までであり、サーバー同期はまだ実装しない。
 
-## 10. 保存時同期フロー
+## 12. 保存時同期フロー
 
 タスク、メモ、運営情報を保存した時の将来フロー:
 
@@ -183,7 +202,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 
 ローカル保存を同期成否に依存させない。
 
-## 11. 競合解決設計
+## 13. 競合解決設計
 
 当面は操作端末1台を前提とするため競合は少ない想定だが、将来の複数端末対応を考慮してルールを持つ。
 
@@ -203,13 +222,13 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 
 初期実装では競合解決 UI は後回しでもよい。ただし、データ構造として conflict を保持できるようにする。
 
-## 12. サーバー設計方針
+## 14. サーバー設計方針
 
 現時点の `server.mjs` は静的配信と確認 API のみを担当する。データ書き込み、同期、復元、外部 LLM 実行、バックグラウンドジョブは行わない。
 
 将来サーバーを追加する場合も、最初から Express / SQLite / Drizzle ORM を前提にしない。必要になった時点で、保存方式、認証、バックアップ復元、既存 PWA への影響を整理してから導入する。
 
-## 13. docs 配置
+## 15. docs 配置
 
 標準入口は次の4ファイルとする。
 
@@ -219,3 +238,5 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 - `docs/development-rules.md`
 
 日付付き docs は詳細資料、過去資料、実装履歴として残してよい。今後の仕様判断で必要な内容は標準4ファイルへ統合する。
+
+現時点では、日付付き docs は削除せず参照資料として残す。標準4ファイルに統合済みの内容と矛盾する場合は、標準4ファイルを優先する。

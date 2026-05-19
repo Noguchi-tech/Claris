@@ -3,6 +3,8 @@
 更新日: 2026-05-19  
 対象: `Claris_app`
 
+位置づけ: 詳細仕様・実装履歴。最新の標準入口は `requirements.md`、`architecture.md`、`api-spec.md`、`development-rules.md` とする。この文書に標準4ファイルと矛盾する旧表記が残る場合は、標準4ファイルを優先する。
+
 ## 1. 起動仕様
 
 - `DOMContentLoaded` で `init()` を実行する。
