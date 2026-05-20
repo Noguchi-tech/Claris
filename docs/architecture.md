@@ -81,10 +81,14 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 ## 5. 現行 UI 設計
 
 - 開閉 UI の記号は `+` を表示、`-` を非表示に統一する。
+- タスク、メモ、運営情報の編集画面と今日画面の上部切替は、共通のタブ UI を使う。タブは DOM 表示だけを切り替える一時状態であり、IndexedDB の保存データ構造や同期対象データには含めない。
+- 編集画面のタブ化では、入力要素を同じ `<form>` 内に残し、保存時は既存の `FormData`、`handleTaskSubmit()`、`saveMemoFromForm()`、`buildPolicyPayloadFromForm()` の経路を維持する。非表示タブ内の関連メモ、関連タスク、添付、録音、文字起こし、AI整理JSON導線は無効化しない。
+- 今日画面は「優先」「サブタスク」「メモ」「運営」のタブで表示対象を切り替える。選択中タブは `app.todayViewTab` のランタイム状態として扱い、`state.ui` へ保存しない。
 - メモ編集画面の文字起こしは `details.transcript-details` を使い、保存済み文字起こし、録音、ドラフト保持の処理は既存経路を維持する。
 - タスクフォームの関連メモ選択は `renderMemoPicker()` で描画し、検索欄と一覧を折りたたみ body に入れる。折りたたみは一時的な UI 状態であり、`task.memoIds`、`syncMemoLinksForTask()`、`syncTaskLinksForMemo()` の保存仕様は変更しない。
 - 関連メモ検索はタイトル、本文、文字起こし、議題、方針、行動を対象にし、`normalizeSearchText()` の表記揺れ吸収を使う。
 - 優先タスクカードと優先度表示の色は、`P1` 赤、`P2` 黄、`P3` 青、`SUB` 緑系とする。保存値と優先順は `P1`、`P2`、`P3`、`SUB` のまま維持する。
+- 実施済みで DL 未到来のタスクカードは、右上のピル表示を優先度ラベルではなく `DL` にする。保存済み優先度の値や並び順は変更せず、表示だけを区別する。
 - 今日画面の優先タスクカードには完了切替ボタンを表示し、`toggleTask()` から通常のタスク更新メタ情報を更新する。
 - アプリ起動直後の初回カレンダータブ表示では、ローカル日付の今日を `ui.selectedDate` と `ui.calendarMonth` に反映する。これは起動中だけの初回処理であり、ユーザーが日付を選んだ後の再訪では選択状態を戻さない。
 - メモ編集画面の関連タスクは `renderTaskPicker()` で描画し、検索欄と一覧を折りたたみ body に入れる。折りたたみは一時的な UI 状態であり、`memo.taskIds`、`syncTaskLinksForMemo()`、`syncMemoLinksForTask()` の保存仕様は変更しない。

@@ -3,7 +3,7 @@
 
   const DB_NAME = "claris-local-db";
   const DB_VERSION = 2;
-  const APP_VERSION = "2026.05.20-attachments-toast-master";
+  const APP_VERSION = "2026.05.20-editor-tabs";
   const STATE_SCHEMA_VERSION = 2;
   const STORE = "app";
   const BACKUP_STORE = "backups";
@@ -100,6 +100,29 @@
     "monthly-end": "月末",
     custom: "カスタム"
   };
+  const taskEditorTabs = [
+    { id: "datetime", label: "日時" },
+    { id: "materials", label: "資料" },
+    { id: "other", label: "その他" }
+  ];
+  const memoEditorTabs = [
+    { id: "body", label: "本文" },
+    { id: "recording", label: "録音" },
+    { id: "summary", label: "内容整理" },
+    { id: "other", label: "その他" }
+  ];
+  const policyEditorTabs = [
+    { id: "period", label: "期間" },
+    { id: "content", label: "内容" },
+    { id: "classification", label: "分類" },
+    { id: "materials", label: "資料" }
+  ];
+  const todayViewTabs = [
+    { id: "priority", label: "優先" },
+    { id: "subtasks", label: "サブタスク" },
+    { id: "memos", label: "メモ" },
+    { id: "policies", label: "運営" }
+  ];
 
   // `departmentId` is kept as the durable storage key. The user-facing label is "分類".
   const defaultDepartments = [
@@ -148,6 +171,7 @@
     dialogScrollRestore: null,
     settingsDrag: null,
     calendarInitialSelectionPending: true,
+    todayViewTab: "priority",
     isComposingText: false,
     toastTimer: 0,
     periodToastTimer: 0
@@ -679,6 +703,93 @@
     return tabs[tab] ? tab : "today";
   }
 
+  function normalizeUiTab(tabConfig, tabId) {
+    return tabConfig.some((item) => item.id === tabId) ? tabId : tabConfig[0].id;
+  }
+
+  function renderUiTabs(scopeId, tabConfig, activeId, label) {
+    const active = normalizeUiTab(tabConfig, activeId);
+    return `
+      <div class="ui-tabs" role="tablist" aria-label="${escapeAttr(label || "切替")}">
+        ${tabConfig.map((item) => `
+          <button
+            id="${escapeAttr(scopeId)}-${escapeAttr(item.id)}-tab"
+            class="ui-tab-button ${item.id === active ? "is-active" : ""}"
+            type="button"
+            role="tab"
+            aria-selected="${item.id === active ? "true" : "false"}"
+            aria-controls="${escapeAttr(scopeId)}-${escapeAttr(item.id)}-panel"
+            data-action="switch-ui-tab"
+            data-ui-tab="${escapeAttr(item.id)}"
+          >
+            <span>${escapeHtml(item.label)}</span>
+            ${Number.isFinite(item.count) ? `<small>${item.count}</small>` : ""}
+          </button>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderUiTabPanel(scopeId, tabId, activeId, html, className = "") {
+    const active = tabId === activeId;
+    return `
+      <section
+        id="${escapeAttr(scopeId)}-${escapeAttr(tabId)}-panel"
+        class="ui-tab-panel ${className} ${active ? "is-active" : ""}"
+        role="tabpanel"
+        aria-labelledby="${escapeAttr(scopeId)}-${escapeAttr(tabId)}-tab"
+        data-ui-tab-panel="${escapeAttr(tabId)}"
+        ${active ? "" : "hidden"}
+      >
+        ${html}
+      </section>
+    `;
+  }
+
+  function activateUiTab(scope, tabId) {
+    if (!scope || !tabId) return;
+    scope.querySelectorAll("[data-ui-tab]").forEach((button) => {
+      const active = button.dataset.uiTab === tabId;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    scope.querySelectorAll("[data-ui-tab-panel]").forEach((panel) => {
+      const active = panel.dataset.uiTabPanel === tabId;
+      panel.classList.toggle("is-active", active);
+      panel.hidden = !active;
+    });
+  }
+
+  function switchUiTab(button) {
+    const tabId = button?.dataset.uiTab || "";
+    const scope = button?.closest("[data-ui-tab-scope]");
+    if (!scope || !tabId) return;
+    activateUiTab(scope, tabId);
+    if (scope.dataset.uiTabScope === "today-view") {
+      app.todayViewTab = normalizeUiTab(todayViewTabs, tabId);
+    }
+  }
+
+  function revealUiTabForElement(element) {
+    const panel = element?.closest("[data-ui-tab-panel]");
+    const scope = panel?.closest("[data-ui-tab-scope]");
+    if (!panel || !scope) return;
+    activateUiTab(scope, panel.dataset.uiTabPanel || "");
+  }
+
+  function validateFormBeforeSubmit(form) {
+    if (!form || form.checkValidity()) return true;
+    const invalid = [...form.elements].find((element) =>
+      typeof element.checkValidity === "function" && !element.checkValidity()
+    );
+    revealUiTabForElement(invalid);
+    requestAnimationFrame(() => {
+      if (typeof invalid?.reportValidity === "function") invalid.reportValidity();
+      else form.reportValidity();
+    });
+    return false;
+  }
+
   function buildHeaderAssigneeLabel() {
     const names = [...new Set(app.state.tasks
       .filter((task) => task.status === "active" && task.actionDate === todayIso() && task.assignee)
@@ -693,28 +804,57 @@
     const activeTasks = app.state.tasks.filter((task) => task.status === "active");
     const todayTasks = sortTasks(activeTasks.filter((task) => taskOccursOnDate(task, date) && !isTaskCompletedForDate(task, date)));
     const overdue = sortTasks(activeTasks.filter((task) => task.dueDate && task.dueDate < date && !taskOccursOnDate(task, date)));
-    const completedToday = sortTasks(app.state.tasks.filter((task) => isTaskCompletedForDate(task, date)));
     const relatedPolicies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
     const todayMemos = getTodayMemos(date);
-    const metricsOpen = app.state.ui.todayMetricsOpen === true;
+    const activeTodayTab = normalizeUiTab(todayViewTabs, app.todayViewTab || "priority");
+    app.todayViewTab = activeTodayTab;
+    const priorityCount = todayTasks.filter((task) => SINGLE_SLOT_PRIORITIES.includes(task.priority)).length + overdue.length;
+    const subtaskTasks = todayTasks.filter((task) => task.priority === "SUB");
+    const tabsWithCounts = todayViewTabs.map((item) => ({
+      ...item,
+      count: {
+        priority: priorityCount,
+        subtasks: subtaskTasks.length,
+        memos: todayMemos.length,
+        policies: relatedPolicies.length
+      }[item.id]
+    }));
 
     view.innerHTML = `
-      <section class="today-metrics-panel" aria-label="今日">
-        <button class="collapse-toggle today-metrics-toggle" type="button" data-action="toggle-today-metrics" aria-expanded="${metricsOpen ? "true" : "false"}">
-          <span class="collapse-mark">${metricsOpen ? "-" : "+"}</span>
-          <span class="section-title">今日</span>
-          <span class="section-count">${todayTasks.length + overdue.length + todayMemos.length + relatedPolicies.length}件</span>
-        </button>
-        <div class="dashboard-grid ${metricsOpen ? "" : "is-collapsed"}" aria-label="実施、DL超過、メモ、運営">
-          ${renderStat("実施", todayTasks.length, "tasks")}
-          ${renderStat("DL超過", overdue.length, "overdue")}
-          ${renderStat("メモ", todayMemos.length, "memos")}
-          ${renderStat("運営", relatedPolicies.length, "policies")}
-        </div>
+      <section class="today-tab-shell" data-ui-tab-scope="today-view" aria-label="今日の表示切替">
+        ${renderUiTabs("today-view", tabsWithCounts, activeTodayTab, "今日の表示切替")}
+        ${renderUiTabPanel("today-view", "priority", activeTodayTab, renderTodayPriorityPanel(date, todayTasks, overdue), "today-tab-panel")}
+        ${renderUiTabPanel("today-view", "subtasks", activeTodayTab, renderTaskSection(priorityMeta.SUB.label, subtaskTasks, "サブタスクはありません", "", date), "today-tab-panel")}
+        ${renderUiTabPanel("today-view", "memos", activeTodayTab, renderTodayMemoPanel(todayMemos), "today-tab-panel")}
+        ${renderUiTabPanel("today-view", "policies", activeTodayTab, renderTodayPolicyPanel(relatedPolicies), "today-tab-panel")}
       </section>
+    `;
+  }
+
+  function renderTodayPriorityPanel(date, todayTasks, overdue) {
+    return `
       ${overdue.length ? renderTaskSection("DL超過", overdue, "DLが過ぎています") : ""}
       ${renderTodayPriorityFocus(date, todayTasks)}
-      ${renderTaskSection(priorityMeta.SUB.label, todayTasks.filter((task) => task.priority === "SUB"), "サブタスクはありません", "", date)}
+    `;
+  }
+
+  function renderTodayMemoPanel(todayMemos) {
+    const memos = sortMemos(todayMemos, app.state.ui.memoSort);
+    return `
+      <section class="section">
+        <div class="section-head">
+          <h2 class="section-title">今日に関係するメモ</h2>
+          <span class="section-count">${memos.length}件</span>
+        </div>
+        <div class="memo-list">
+          ${memos.length ? memos.map(renderMemoCard).join("") : renderEmpty("今日のメモはありません。", "メモを追加")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderTodayPolicyPanel(relatedPolicies) {
+    return `
       <section class="section">
         <div class="section-head">
           <h2 class="section-title">今日に関係する運営情報</h2>
@@ -724,7 +864,6 @@
           ${relatedPolicies.length ? relatedPolicies.map(renderPolicyCard).join("") : renderEmpty("今日の運営情報はありません。", "運営情報を追加")}
         </div>
       </section>
-      ${app.state.settings.showCompleted ? renderTaskSection("今日完了", completedToday, "今日完了したタスクはありません", "", date) : ""}
     `;
   }
 
@@ -1321,13 +1460,17 @@
     const completed = isTaskCompletedForDate(task, contextDate);
     const recurrence = recurrenceLabel(task);
     const dateAttr = contextDate ? ` data-date="${escapeAttr(contextDate)}"` : "";
+    const showPendingDuePill = completed && task.dueDate && task.dueDate > todayIso();
+    const headerPill = showPendingDuePill
+      ? `<span class="priority-pill due-pill">DL</span>`
+      : `<span class="priority-pill ${priority.className}">${priority.label}</span>`;
     return `
       <article class="task-card ${completed ? "completed" : ""}" data-card-action="edit-task" data-id="${escapeAttr(task.id)}" tabindex="0">
         <button class="complete-button ${completed ? "is-completed" : ""}" type="button" data-action="toggle-task" data-id="${escapeAttr(task.id)}"${dateAttr} aria-label="完了切替"></button>
         <div class="task-main">
           <div class="task-title-row">
             <h3 class="task-title"><button class="title-button" type="button" data-action="edit-task" data-id="${escapeAttr(task.id)}">${escapeHtml(task.title)}</button></h3>
-            <span class="priority-pill ${priority.className}">${priority.label}</span>
+            ${headerPill}
           </div>
           <div class="meta-row">
             ${task.actionDate ? `<span class="tag">実施 ${formatShortDate(task.actionDate)}</span>` : ""}
@@ -1500,6 +1643,10 @@
     if (action === "add-task-slot") openTaskForm(null, { actionDate: button.dataset.date, priority: button.dataset.priority });
     if (action === "open-settings") openSettings();
     if (action === "quick-import") openImportDialog();
+    if (action === "switch-ui-tab") {
+      switchUiTab(button);
+      return;
+    }
     if (action === "close-dialog") requestCloseDialog(button.closest("dialog") || entityDialog);
     if (action === "confirm-close-save") await savePendingCloseDialog();
     if (action === "confirm-close-discard") discardPendingCloseDialog();
@@ -1766,6 +1913,7 @@
     if (!(form instanceof HTMLFormElement)) return;
     event.preventDefault();
     if (event.submitter instanceof HTMLElement) setDialogOriginFromElement(event.submitter);
+    if (!validateFormBeforeSubmit(form)) return;
     if (form.id === "taskForm") await handleTaskSubmit(form);
     if (form.id === "memoForm") await handleMemoSubmit(form);
     if (form.id === "policyForm") await handlePolicySubmit(form);
@@ -1973,6 +2121,159 @@
     return { priority: "SUB" };
   }
 
+  function renderTaskEditorTabs(value) {
+    const active = "datetime";
+    return `
+      <div class="editor-tab-shell" data-ui-tab-scope="task-editor">
+        ${renderUiTabs("task-editor", taskEditorTabs, active, "タスク編集タブ")}
+        ${renderUiTabPanel("task-editor", "datetime", active, `
+          <div class="field-inline task-date-row">
+            ${renderTaskDatePicker("actionDate", "taskActionDate", "実施", value.actionDate)}
+            ${renderTaskDatePicker("dueDate", "taskDueDate", "DL", value.dueDate)}
+          </div>
+          ${renderTaskSharedDateCalendar(value.actionDate || value.dueDate)}
+          ${renderTaskTimePanel(value.startTime, value.endTime)}
+          <div class="field">
+            <label>優先度の空き状況</label>
+            <input id="taskPriority" name="priority" type="hidden" value="${escapeAttr(value.priority)}">
+            <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
+          </div>
+          ${renderRecurrenceFields(value.recurrence)}
+        `)}
+        ${renderUiTabPanel("task-editor", "materials", active, `
+          <div class="field task-memo-field">
+            ${renderMemoPicker(value.memoIds)}
+            <div class="toolbar">
+              ${value.id
+                ? `<button class="ghost-button compact" type="button" data-action="task-to-memo" data-id="${escapeAttr(value.id)}">新しい関連メモ</button>`
+                : `<span class="form-hint">関連メモの新規作成は、タスク保存後に使えます。</span>`}
+            </div>
+          </div>
+          ${renderAttachmentPanel("task", value.id)}
+        `)}
+        ${renderUiTabPanel("task-editor", "other", active, `
+          <div class="field-inline task-owner-row">
+            <div class="field">
+              <label for="taskDepartment">${CLASSIFICATION_LABEL}</label>
+              <select id="taskDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
+            </div>
+            <div class="field">
+              <label for="taskAssignee">担当者</label>
+              <input id="taskAssignee" name="assignee" value="${escapeAttr(value.assignee)}" autocomplete="off" placeholder="任意">
+            </div>
+            <div class="field">
+              <label for="taskEstimate">見積分</label>
+              <input id="taskEstimate" name="estimatedMinutes" type="number" min="0" step="5" value="${escapeAttr(value.estimatedMinutes)}">
+            </div>
+          </div>
+        `)}
+      </div>
+    `;
+  }
+
+  function renderMemoEditorTabs(value, existing) {
+    const active = "body";
+    return `
+      <div class="editor-tab-shell" data-ui-tab-scope="memo-editor">
+        ${renderUiTabs("memo-editor", memoEditorTabs, active, "メモ編集タブ")}
+        ${renderUiTabPanel("memo-editor", "body", active, `
+          ${renderExpandableMemoField({
+            id: "memoBody",
+            name: "body",
+            label: "本文",
+            value: value.body,
+            required: true,
+            large: true
+          })}
+        `)}
+        ${renderUiTabPanel("memo-editor", "recording", active, `
+          <section class="memo-recording-panel">
+            <div class="section-head">
+              <h2 class="section-title">録音</h2>
+              <span class="recording-status" data-recording-status>録音待機中</span>
+            </div>
+            <div class="recording-bar">
+              <button class="ghost-button compact" type="button" data-action="start-recording">録音</button>
+              <button class="ghost-button compact" type="button" data-action="stop-recording" disabled>停止</button>
+            </div>
+            <input type="hidden" data-recording-transcript-draft value="">
+            <div class="transcript-preview hidden" data-recording-transcript-preview aria-live="polite"></div>
+          </section>
+          ${value.recordings.length ? `
+            <div class="field">
+              <label>録音</label>
+              <div class="audio-list">${value.recordings.map(renderRecording).join("")}</div>
+            </div>
+          ` : ""}
+          <details class="transcript-details">
+            <summary><span class="transcript-summary-mark" aria-hidden="true"></span><span>文字起こし</span></summary>
+            <div class="field">
+              <label for="memoTranscript">全文</label>
+              <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(value.transcript)}</textarea>
+            </div>
+          </details>
+        `)}
+        ${renderUiTabPanel("memo-editor", "summary", active, `
+          <div class="field-inline memo-summary-fields">
+            ${renderExpandableMemoField({ id: "memoAgenda", name: "agenda", label: memoFieldLabels.agenda, value: value.agenda })}
+            ${renderExpandableMemoField({ id: "memoDecisions", name: "decisions", label: memoFieldLabels.decisions, value: value.decisions })}
+            ${renderExpandableMemoField({ id: "memoNextActions", name: "nextActions", label: memoFieldLabels.nextActions, value: value.nextActions })}
+          </div>
+          ${existing ? renderMemoAiTools(value) : `<p class="form-hint">AI整理用JSON共有と取り込みは、メモ保存後に使えます。</p>`}
+        `)}
+        ${renderUiTabPanel("memo-editor", "other", active, `
+          <div class="field-inline">
+            <div class="field">
+              <label for="memoDepartment">${CLASSIFICATION_LABEL}</label>
+              <select id="memoDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
+            </div>
+          </div>
+          ${renderTaskPicker(value.taskIds)}
+          ${renderAttachmentPanel("memo", value.id)}
+        `)}
+      </div>
+    `;
+  }
+
+  function renderPolicyEditorTabs(value) {
+    const active = "period";
+    return `
+      <div class="editor-tab-shell" data-ui-tab-scope="policy-editor">
+        ${renderUiTabs("policy-editor", policyEditorTabs, active, "運営情報編集タブ")}
+        ${renderUiTabPanel("policy-editor", "period", active, `
+          ${renderPolicyPeriodField(value.periodStart, value.periodEnd)}
+        `)}
+        ${renderUiTabPanel("policy-editor", "content", active, `
+          <div class="field">
+            <label for="policyTitle">タイトル</label>
+            <input id="policyTitle" name="title" required value="${escapeAttr(value.title)}" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="policyContent">内容</label>
+            <textarea id="policyContent" name="content">${escapeHtml(value.content)}</textarea>
+          </div>
+        `)}
+        ${renderUiTabPanel("policy-editor", "classification", active, `
+          <div class="field-inline">
+            <div class="field">
+              <label for="policyType">種別</label>
+              <select id="policyType" name="type" data-current-value="${escapeAttr(value.type)}">
+                ${renderPolicyTypeOptions(value.type)}
+              </select>
+            </div>
+            <div class="field">
+              <label for="policyDepartment">${CLASSIFICATION_LABEL}</label>
+              <select id="policyDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
+            </div>
+          </div>
+        `)}
+        ${renderUiTabPanel("policy-editor", "materials", active, `
+          ${renderAttachmentPanel("policy", value.id)}
+        `)}
+      </div>
+    `;
+  }
+
   function openTaskForm(task = null, defaults = {}, options = {}) {
     const existing = task ? normalizeTask(task) : null;
     const value = {
@@ -1991,48 +2292,14 @@
       recurrence: normalizeRecurrence(existing?.recurrence || defaults.recurrence || {})
     };
     openSheet(`
-      <div class="sheet">
-        ${renderSheetHeader(existing ? "タスク編集" : "タスク追加", "実施日とDLは別々に管理します。")}
-        <form id="taskForm" class="form-grid" data-id="${escapeAttr(value.id)}" data-original-action-date="${escapeAttr(existing?.actionDate || "")}" data-original-priority="${escapeAttr(existing?.priority || "")}">
+      <div class="sheet sheet-editor">
+        ${renderSheetHeader(existing ? "タスク編集" : "タスク追加")}
+        <form id="taskForm" class="form-grid" data-id="${escapeAttr(value.id)}" data-original-action-date="${escapeAttr(existing?.actionDate || "")}" data-original-priority="${escapeAttr(existing?.priority || "")}" novalidate>
           <div class="field">
             <label for="taskTitle">タスク名</label>
             <input id="taskTitle" name="title" required value="${escapeAttr(value.title)}" autocomplete="off">
           </div>
-          <div class="field-inline task-date-row">
-            ${renderTaskDatePicker("actionDate", "taskActionDate", "実施", value.actionDate)}
-            ${renderTaskDatePicker("dueDate", "taskDueDate", "DL", value.dueDate)}
-          </div>
-          ${renderTaskSharedDateCalendar(value.actionDate || value.dueDate)}
-          ${renderTaskTimePanel(value.startTime, value.endTime)}
-          <div class="field">
-            <label>優先度の空き状況</label>
-            <input id="taskPriority" name="priority" type="hidden" value="${escapeAttr(value.priority)}">
-            <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
-          </div>
-          ${renderRecurrenceFields(value.recurrence)}
-          <div class="field task-memo-field">
-            ${renderMemoPicker(value.memoIds)}
-            <div class="toolbar">
-              ${value.id
-                ? `<button class="ghost-button compact" type="button" data-action="task-to-memo" data-id="${escapeAttr(value.id)}">新しい関連メモ</button>`
-                : `<span class="form-hint">関連メモの新規作成は、タスク保存後に使えます。</span>`}
-            </div>
-          </div>
-          ${renderAttachmentPanel("task", value.id)}
-          <div class="field-inline task-owner-row">
-            <div class="field">
-              <label for="taskDepartment">${CLASSIFICATION_LABEL}</label>
-              <select id="taskDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
-            </div>
-            <div class="field">
-              <label for="taskAssignee">担当者</label>
-              <input id="taskAssignee" name="assignee" value="${escapeAttr(value.assignee)}" autocomplete="off" placeholder="任意">
-            </div>
-            <div class="field">
-              <label for="taskEstimate">見積分</label>
-              <input id="taskEstimate" name="estimatedMinutes" type="number" min="0" step="5" value="${escapeAttr(value.estimatedMinutes)}">
-            </div>
-          </div>
+          ${renderTaskEditorTabs(value)}
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
           </div>
@@ -2073,60 +2340,14 @@
     };
     resetRecordingDraft();
     openSheet(`
-      <div class="sheet">
+      <div class="sheet sheet-editor">
         ${renderSheetHeader(existing ? "メモ編集" : "メモ追加", "走り書きから始めて、後で議題・方針・行動へ整えられます。")}
-        <form id="memoForm" class="form-grid" data-id="${escapeAttr(value.id)}">
+        <form id="memoForm" class="form-grid" data-id="${escapeAttr(value.id)}" novalidate>
           <div class="field">
             <label for="memoTitle">タイトル</label>
             <input id="memoTitle" name="title" value="${escapeAttr(value.title)}" autocomplete="off">
           </div>
-          <section class="memo-recording-panel">
-            <div class="section-head">
-              <h2 class="section-title">録音</h2>
-              <span class="recording-status" data-recording-status>録音待機中</span>
-            </div>
-            <div class="recording-bar">
-              <button class="ghost-button compact" type="button" data-action="start-recording">録音</button>
-              <button class="ghost-button compact" type="button" data-action="stop-recording" disabled>停止</button>
-            </div>
-            <input type="hidden" data-recording-transcript-draft value="">
-            <div class="transcript-preview hidden" data-recording-transcript-preview aria-live="polite"></div>
-          </section>
-          ${renderExpandableMemoField({
-            id: "memoBody",
-            name: "body",
-            label: "本文",
-            value: value.body,
-            required: true,
-            large: true
-          })}
-          ${existing ? renderMemoAiTools(value) : ""}
-          <div class="field-inline">
-            ${renderExpandableMemoField({ id: "memoAgenda", name: "agenda", label: memoFieldLabels.agenda, value: value.agenda })}
-            ${renderExpandableMemoField({ id: "memoDecisions", name: "decisions", label: memoFieldLabels.decisions, value: value.decisions })}
-            ${renderExpandableMemoField({ id: "memoNextActions", name: "nextActions", label: memoFieldLabels.nextActions, value: value.nextActions })}
-          </div>
-          ${value.recordings.length ? `
-            <div class="field">
-              <label>録音</label>
-              <div class="audio-list">${value.recordings.map(renderRecording).join("")}</div>
-            </div>
-          ` : ""}
-          <div class="field-inline">
-            <div class="field">
-              <label for="memoDepartment">${CLASSIFICATION_LABEL}</label>
-              <select id="memoDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
-            </div>
-          </div>
-          ${renderTaskPicker(value.taskIds)}
-          <details class="transcript-details">
-            <summary><span class="transcript-summary-mark" aria-hidden="true"></span><span>文字起こし</span></summary>
-            <div class="field">
-              <label for="memoTranscript">全文</label>
-              <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(value.transcript)}</textarea>
-            </div>
-          </details>
-          ${renderAttachmentPanel("memo", value.id)}
+          ${renderMemoEditorTabs(value, existing)}
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
           </div>
@@ -2199,33 +2420,12 @@
       memoIds: existing?.memoIds || defaults.memoIds || []
     };
     openSheet(`
-      <div class="sheet">
+      <div class="sheet sheet-editor">
         ${renderSheetHeader(existing ? "運営情報編集" : "運営情報追加", "内容をまとめて残します。")}
-        <form id="policyForm" class="form-grid" data-id="${escapeAttr(value.id)}">
+        <form id="policyForm" class="form-grid" data-id="${escapeAttr(value.id)}" novalidate>
           ${value.taskIds.map((id) => `<input type="hidden" name="taskIds" value="${escapeAttr(id)}">`).join("")}
           ${value.memoIds.map((id) => `<input type="hidden" name="memoIds" value="${escapeAttr(id)}">`).join("")}
-          <div class="field">
-            <label for="policyTitle">タイトル</label>
-            <input id="policyTitle" name="title" required value="${escapeAttr(value.title)}" autocomplete="off">
-          </div>
-          <div class="field-inline">
-            <div class="field">
-              <label for="policyType">種別</label>
-              <select id="policyType" name="type" data-current-value="${escapeAttr(value.type)}">
-                ${renderPolicyTypeOptions(value.type)}
-              </select>
-            </div>
-            ${renderPolicyPeriodField(value.periodStart, value.periodEnd)}
-          </div>
-            <div class="field">
-              <label for="policyDepartment">${CLASSIFICATION_LABEL}</label>
-            <select id="policyDepartment" name="departmentId" data-current-value="${escapeAttr(value.departmentId)}">${renderDepartmentOptions(value.departmentId)}</select>
-            </div>
-          <div class="field">
-            <label for="policyContent">内容</label>
-            <textarea id="policyContent" name="content">${escapeHtml(value.content)}</textarea>
-          </div>
-          ${renderAttachmentPanel("policy", value.id)}
+          ${renderPolicyEditorTabs(value)}
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
           </div>

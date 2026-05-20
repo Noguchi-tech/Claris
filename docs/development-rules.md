@@ -11,6 +11,7 @@
 - 現在動いている静的 PWA 構造を優先する。
 - ローカル保存、オフライン利用、IndexedDB、Service Worker、JSON バックアップ導線を維持する。
 - UI の開閉記号は、表示を `+`、非表示を `-` に統一する。
+- 編集カードや今日画面をタブ UI にする場合は、タブ状態を一時 UI 状態として扱い、保存データ構造や同期対象データを不要に増やさない。
 - 大きな変更の前には、目的、影響範囲、差分方針を説明する。
 - 実装変更で要件や仕様が変わる場合は、docs も同じタイミングで更新する。
 - 標準入口は `requirements.md`、`architecture.md`、`api-spec.md`、`development-rules.md` とする。
@@ -44,6 +45,7 @@
 - 保存済みデータの互換性を保つため、内部キーの変更は原則避ける。
 - 既存の `createdAt`、`updatedAt` を維持する。
 - タスク関連メモの開閉 UI は保存データ構造に含めない。閉じた状態でも既存の `task.memoIds` とメモ同期処理が失われないよう、保存用 input は維持する。
+- 編集カードのタブ切替では、非表示タブ内の input / textarea / select / file input を無効化しない。関連メモ、関連タスク、添付、録音、文字起こし、AI整理JSON導線は、既存の保存・検証経路に乗せたままにする。
 - 優先度の色変更では `P1` / `P2` / `P3` / `SUB` の保存値、意味、順序を変更しない。
 - 同期用メタ情報は `deletedAt`、`syncStatus`、`deviceId`、`version` を標準とする。
 - 添付ファイルは `attachments[]` に保存し、`ownerType`、`ownerId`、`fileName`、`mimeType`、`size`、`createdAt`、`updatedAt`、`deletedAt`、`syncStatus`、`deviceId`、`version`、`dataUrl` または `blob` を保持する。
