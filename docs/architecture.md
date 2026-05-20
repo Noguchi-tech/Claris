@@ -61,6 +61,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 - `departments`
 - `projects`
 - `deletedItems`
+- `attachments`
 
 同期メタ情報追加後の同期対象レコード:
 
@@ -68,11 +69,12 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 - `memos[]`
 - `policies[]`
 - `departments[]`
+- `attachments[]`
 - `deletedItems[]`
 
 各レコードには `updatedAt`、`deletedAt`、`syncStatus`、`deviceId`、`version` を持たせる。既存データに不足がある場合は起動時の正規化で補完し、補完前に `before-metadata-migration` バックアップを `backups` ストアへ保存する。
 
-現行実装では、`data/claris-master-2026-05-18.json` の `fullSync: true` を起動時に確認し、未適用の `importId` であれば IndexedDB の state へ上書き反映する。反映前には `backups` ストアへ `before-sync` バックアップを保存する。
+現行実装では、`data/claris-master-YYYY-MM-DD.json` 形式の master JSON を起動時に新しい日付から順に確認し、`fullSync: true` かつ未適用の `importId` であれば IndexedDB の state へ上書き反映する。master JSON は今後も `Claris_app/data/` に配置し、ファイル名は `claris-master-2026-05-20.json` のように日付付きにする。反映前には必ず `backups` ストアへ `before-sync` バックアップを保存し、適用済み判定には `settings.appliedTaskImportId` を使う。
 
 `lastFullSyncBackup` または `lastTaskImportBackup` は旧来の一時退避であり、正式な世代バックアップとして扱わない。
 
@@ -83,9 +85,11 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 - タスクフォームの関連メモ選択は `renderMemoPicker()` で描画し、検索欄と一覧を折りたたみ body に入れる。折りたたみは一時的な UI 状態であり、`task.memoIds`、`syncMemoLinksForTask()`、`syncTaskLinksForMemo()` の保存仕様は変更しない。
 - 関連メモ検索はタイトル、本文、文字起こし、議題、方針、行動を対象にし、`normalizeSearchText()` の表記揺れ吸収を使う。
 - 優先タスクカードと優先度表示の色は、`P1` 赤、`P2` 黄、`P3` 青、`SUB` 緑系とする。保存値と優先順は `P1`、`P2`、`P3`、`SUB` のまま維持する。
+- 今日画面の優先タスクカードには完了切替ボタンを表示し、`toggleTask()` から通常のタスク更新メタ情報を更新する。
 - アプリ起動直後の初回カレンダータブ表示では、ローカル日付の今日を `ui.selectedDate` と `ui.calendarMonth` に反映する。これは起動中だけの初回処理であり、ユーザーが日付を選んだ後の再訪では選択状態を戻さない。
 - メモ編集画面の関連タスクは `renderTaskPicker()` で描画し、検索欄と一覧を折りたたみ body に入れる。折りたたみは一時的な UI 状態であり、`memo.taskIds`、`syncTaskLinksForMemo()`、`syncMemoLinksForTask()` の保存仕様は変更しない。
-- メモ本文、議題、方針、行動は `renderExpandableMemoField()` で右下に拡張ボタンを持つ textarea として描画する。拡張状態は DOM クラスだけで扱い、IndexedDB へ保存しない。
+- メモ本文、議題、方針、行動は `renderExpandableMemoField()` で右下に拡張ボタンを持つ textarea として描画する。拡張時はカード内で大きく目立つ高さまで広げるが、保存ボタンと閉じるボタンはスクロールで操作可能なままにする。拡張状態は DOM クラスだけで扱い、IndexedDB へ保存しない。
+- 添付は `attachments[]` に保存し、`ownerType: "task" | "memo" | "policy"` と `ownerId` でタスク、メモ、運営情報へ紐づける。初期実装は `dataUrl` による IndexedDB 保存を優先し、1ファイル8MBを上限とする。削除は `deletedAt` を付ける論理削除とし、ユーザーデータを自動で完全削除しない。
 - ダイアログ内スクロール位置は `captureDialogScrollState()` / `restoreDialogScrollState()` で、`render()`、`visibilitychange`、`resize`、`orientationchange`、`visualViewport.resize` の前後に保持する。通常の新規カード表示、保存して閉じる、タブ切替の意図的な遷移は既存経路を維持する。
 
 ## 6. AI整理結果取り込み設計
@@ -121,6 +125,7 @@ IndexedDB `claris-local-db` の `app` ストアに `state` を保存し、`backu
 - `memos`
 - `policies`
 - `departments`
+- `attachments`
 - `settings.policyTypes`
 - `deletedItems` と、退避された元データに付与される `deletedAt`
 

@@ -46,6 +46,8 @@
 - タスク関連メモの開閉 UI は保存データ構造に含めない。閉じた状態でも既存の `task.memoIds` とメモ同期処理が失われないよう、保存用 input は維持する。
 - 優先度の色変更では `P1` / `P2` / `P3` / `SUB` の保存値、意味、順序を変更しない。
 - 同期用メタ情報は `deletedAt`、`syncStatus`、`deviceId`、`version` を標準とする。
+- 添付ファイルは `attachments[]` に保存し、`ownerType`、`ownerId`、`fileName`、`mimeType`、`size`、`createdAt`、`updatedAt`、`deletedAt`、`syncStatus`、`deviceId`、`version`、`dataUrl` または `blob` を保持する。
+- 添付ファイルの削除は原則として論理削除に寄せ、ユーザーデータを自動で完全削除しない。
 - 既存データに同期用メタ情報がない場合は、起動時正規化で `version: 1`、`deletedAt: null`、`syncStatus: "local-only"`、現端末の `deviceId`、不足している `updatedAt` を補完する。
 - 新規作成、編集、削除、復元で変更されたデータは `syncStatus: "pending"` とし、対象データの `version` を `+1` する。新規作成時は `version: 1` とする。
 - 現行 `deletedItems` と将来の論理削除設計を混同しない。
@@ -55,6 +57,7 @@
 ## 5. バックアップに関するルール
 
 - 同期処理の前には必ず `before-sync` バックアップを作成する。
+- master JSON は `Claris_app/data/claris-master-YYYY-MM-DD.json` に配置する。起動時上書きに使う場合は `fullSync: true` と一意の `importId` を含め、反映前の `before-sync` バックアップ仕様を変えない。
 - 復元処理の前には必ず `before-restore` バックアップを作成する。
 - 同期メタ情報を既存 state へ補完する前には、可能な限り `before-metadata-migration` バックアップを作成する。
 - バックアップには state 全体、件数、schemaVersion、作成理由、作成日時を含める。
@@ -111,3 +114,4 @@
 - `/Users/noguchi_rl99/Documents/Codex/Claris`、`/Users/noguchi_rl99/Documents/GitHub/Claris`、iCloud Drive 配下、過去の `backups/` 配下は直接編集対象にしない。必要な内容がある場合は、本体リポジトリへ差分として取り込む。
 - GitHub clone は単一の source of truth に寄せる。複数 clone が見つかった場合は、削除前に remote、branch、最新 commit、主要ファイルのハッシュ、未コミット差分を確認し、本体と削除候補を明確に分けて報告する。
 - 配布用コピーやバックアップを作る必要がある場合は、用途、作成日、削除予定または保持理由を docs か作業メモに残し、実装対象と誤認しない名前にする。
+- `.DS_Store` はコミットしない。見つけた場合は `.gitignore` と Git 追跡状態を確認する。

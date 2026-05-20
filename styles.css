@@ -353,6 +353,21 @@ input[type="checkbox"] {
   line-height: 1.35;
 }
 
+.priority-focus-task-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.priority-complete-button {
+  width: 30px;
+  height: 30px;
+  margin-top: 0;
+  border-width: 2px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
 .task-card,
 .memo-card,
 .policy-card,
@@ -1124,16 +1139,29 @@ textarea {
 }
 
 .memo-expandable-field textarea {
-  transition: min-height 180ms ease, box-shadow 150ms ease;
+  transition: min-height 180ms ease, box-shadow 150ms ease, border-color 150ms ease;
+}
+
+.memo-expandable-field.is-expanded {
+  grid-column: 1 / -1;
+  position: relative;
+  z-index: 3;
+  margin: -2px -4px 0;
+  padding: 8px;
+  border: 2px solid rgba(48, 132, 173, 0.5);
+  border-radius: 8px;
+  background: rgba(248, 252, 252, 0.96);
+  box-shadow: 0 14px 32px rgba(20, 25, 24, 0.14);
 }
 
 .memo-expandable-field.is-expanded textarea {
-  min-height: min(44dvh, 420px);
-  box-shadow: inset 0 0 0 1px rgba(31, 52, 48, 0.18);
+  min-height: min(72dvh, 680px);
+  border-color: rgba(48, 132, 173, 0.56);
+  box-shadow: inset 0 0 0 1px rgba(31, 52, 48, 0.14);
 }
 
 .memo-expandable-field-large.is-expanded textarea {
-  min-height: min(52dvh, 500px);
+  min-height: min(76dvh, 740px);
 }
 
 .memo-field-resize-button {
@@ -1192,6 +1220,18 @@ textarea {
   height: 7px;
 }
 
+.memo-expandable-field.is-expanded .memo-field-resize-button {
+  border-color: rgba(31, 52, 48, 0.18);
+  background: var(--green);
+}
+
+.memo-expandable-field.is-expanded .memo-field-resize-button::before,
+.memo-expandable-field.is-expanded .memo-field-resize-button::after,
+.memo-expandable-field.is-expanded .memo-field-resize-button span::before,
+.memo-expandable-field.is-expanded .memo-field-resize-button span::after {
+  border-color: #fff;
+}
+
 .memo-card h3,
 .policy-card h3 {
   font-size: 16px;
@@ -1209,6 +1249,91 @@ textarea {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
+}
+
+.attachment-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.attachment-add-row {
+  align-items: center;
+}
+
+.attachment-list {
+  display: grid;
+  gap: 8px;
+}
+
+.attachment-item {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid rgba(23, 33, 31, 0.08);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.attachment-thumb,
+.attachment-file-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 7px;
+}
+
+.attachment-thumb {
+  object-fit: cover;
+  background: #eef4f2;
+}
+
+.attachment-file-icon {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  background: #f4f7f6;
+}
+
+.attachment-file-icon::before {
+  content: "";
+  width: 20px;
+  height: 26px;
+  border: 2px solid var(--green);
+  border-radius: 3px;
+  background: linear-gradient(135deg, transparent 0 70%, rgba(31, 52, 48, 0.14) 71%);
+}
+
+.attachment-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.attachment-main strong,
+.attachment-main span {
+  overflow-wrap: anywhere;
+}
+
+.attachment-main span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.attachment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment-view-link {
+  text-decoration: none;
 }
 
 .body-preview-button {

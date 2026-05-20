@@ -3,7 +3,7 @@
 
   const DB_NAME = "claris-local-db";
   const DB_VERSION = 2;
-  const APP_VERSION = "2026.05.20-memo-ai-json-share";
+  const APP_VERSION = "2026.05.20-attachments-toast-master";
   const STATE_SCHEMA_VERSION = 2;
   const STORE = "app";
   const BACKUP_STORE = "backups";
@@ -11,8 +11,15 @@
   const STATE_KEY = "state";
   const LOCAL_BACKUP_TYPES = new Set(["before-sync", "before-restore", "before-metadata-migration"]);
   const SYNC_STATUSES = new Set(["local-only", "pending", "synced", "conflict"]);
-  const SYNC_METADATA_COLLECTIONS = ["tasks", "memos", "policies", "departments"];
-  const BUNDLED_TASK_IMPORT_URL = "./data/claris-master-2026-05-18.json";
+  const SYNC_METADATA_COLLECTIONS = ["tasks", "memos", "policies", "departments", "attachments"];
+  const BUNDLED_MASTER_IMPORT_LOOKBACK_DAYS = 45;
+  const BUNDLED_MASTER_IMPORT_FALLBACK_URLS = [
+    "./data/claris-master-2026-05-20.json",
+    "./data/claris-master-2026-05-18.json",
+    "./data/claris-master-2026-05-17.json"
+  ];
+  const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+  const attachmentOwnerTypes = new Set(["task", "memo", "policy"]);
   const SINGLE_SLOT_PRIORITIES = ["P1", "P2", "P3"];
   const PERIOD_LINE_CLASS_COUNT = 6;
   const CLASSIFICATION_LABEL = "分類";
@@ -318,6 +325,7 @@
       tasks: sourceState?.tasks?.length || 0,
       memos: sourceState?.memos?.length || 0,
       policies: sourceState?.policies?.length || 0,
+      attachments: sourceState?.attachments?.filter((attachment) => !attachment.deletedAt).length || 0,
       departments: sourceState?.departments?.length || 0,
       deletedItems: sourceState?.deletedItems?.length || 0
     };
@@ -364,6 +372,7 @@
       tasks: [],
       memos: [],
       policies: [],
+      attachments: [],
       departments: defaultDepartments.map(([id, name, parentId], index) => ({
         id,
         name,
@@ -391,6 +400,7 @@
       tasks: Array.isArray(saved.tasks) ? saved.tasks : [],
       memos: Array.isArray(saved.memos) ? saved.memos : [],
       policies: Array.isArray(saved.policies) ? saved.policies : [],
+      attachments: Array.isArray(saved.attachments) ? saved.attachments : [],
       departments: Array.isArray(saved.departments) ? saved.departments : base.departments,
       projects: [],
       deletedItems: Array.isArray(saved.deletedItems) ? saved.deletedItems : []
@@ -401,6 +411,7 @@
     merged.tasks = merged.tasks.map((task) => normalizeTask(task, metadataDefaults));
     merged.memos = merged.memos.map((memo) => normalizeMemo(memo, metadataDefaults));
     merged.policies = merged.policies.map((policy) => normalizePolicy(policy, metadataDefaults));
+    merged.attachments = merged.attachments.map((attachment) => normalizeAttachment(attachment, metadataDefaults));
     merged.departments = normalizeDepartments(merged.departments, base.departments, metadataDefaults);
     merged.settings.policyTypes = normalizePolicyTypes(merged.settings.policyTypes);
     if (!merged.ui.todayMetricsUserSet) merged.ui.todayMetricsOpen = false;
@@ -529,6 +540,30 @@
       createdAt: source.createdAt || now,
       ...normalizeEntityMetadata(source, { ...metadataDefaults, now })
     };
+  }
+
+  function normalizeAttachment(attachment = {}, metadataDefaults = {}) {
+    const source = attachment || {};
+    const now = metadataDefaults.now || nowIso();
+    const ownerType = normalizeAttachmentOwnerType(source.ownerType);
+    const blob = source.blob instanceof Blob ? source.blob : null;
+    const dataUrl = typeof source.dataUrl === "string" ? source.dataUrl : "";
+    return {
+      id: source.id || uid("attachment"),
+      ownerType,
+      ownerId: String(source.ownerId || ""),
+      fileName: String(source.fileName || source.name || "添付ファイル"),
+      mimeType: String(source.mimeType || source.type || "application/octet-stream"),
+      size: Number(source.size || blob?.size || 0),
+      createdAt: source.createdAt || now,
+      ...(blob ? { blob } : { dataUrl }),
+      ...normalizeEntityMetadata(source, { ...metadataDefaults, now })
+    };
+  }
+
+  function normalizeAttachmentOwnerType(value) {
+    const type = String(value || "").trim();
+    return attachmentOwnerTypes.has(type) ? type : "task";
   }
 
   function normalizeMemoAiStatus(value) {
@@ -712,6 +747,7 @@
     const meta = priorityMeta[priority] || priorityMeta.SUB;
     const task = tasks[0] || null;
     const extra = Math.max(0, tasks.length - 1);
+    const completed = task ? isTaskCompletedForDate(task, date) : false;
     const cardAction = task ? ` data-card-action="edit-task" data-id="${escapeAttr(task.id)}" tabindex="0"` : "";
     return `
       <article class="priority-focus-slot priority-focus-${priority.toLowerCase()} ${task ? "has-task" : "is-empty"}"${cardAction}>
@@ -720,7 +756,10 @@
           <span>${tasks.length}件</span>
         </div>
         ${task ? `
-          <button class="title-button priority-focus-title" type="button" data-action="edit-task" data-id="${escapeAttr(task.id)}">${escapeHtml(task.title)}</button>
+          <div class="priority-focus-task-row">
+            <button class="complete-button priority-complete-button ${completed ? "is-completed" : ""}" type="button" data-action="toggle-task" data-id="${escapeAttr(task.id)}" data-date="${escapeAttr(date)}" aria-label="完了切替"></button>
+            <button class="title-button priority-focus-title" type="button" data-action="edit-task" data-id="${escapeAttr(task.id)}">${escapeHtml(task.title)}</button>
+          </div>
           <div class="meta-row">
             ${formatTaskTimeRange(task) ? `<span class="tag">${escapeHtml(formatTaskTimeRange(task))}</span>` : ""}
             ${task.dueDate ? `<span class="tag">DL ${formatShortDate(task.dueDate)}</span>` : ""}
@@ -1270,6 +1309,7 @@
     const priority = priorityMeta[task.priority] || priorityMeta.SUB;
     const department = findById(app.state.departments, task.departmentId);
     const linkedMemos = getLinkedMemos(task);
+    const attachments = getActiveAttachments("task", task.id);
     const memoSummary = shouldShowMemos(task, linkedMemos)
       ? `<div class="memo-summary">${linkedMemos.map((memo) => `
           <button class="memo-link-button" type="button" data-action="edit-memo" data-id="${escapeAttr(memo.id)}">
@@ -1296,6 +1336,7 @@
             ${task.assignee ? `<span class="tag">担当 ${escapeHtml(task.assignee)}</span>` : ""}
             ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
             ${linkedMemos.length ? `<span class="tag">メモ ${linkedMemos.length}</span>` : ""}
+            ${attachments.length ? `<span class="tag">添付 ${attachments.length}</span>` : ""}
             ${recurrence ? `<span class="tag">${escapeHtml(recurrence)}</span>` : ""}
           </div>
           ${memoSummary}
@@ -1314,6 +1355,7 @@
     const department = findById(app.state.departments, memo.departmentId);
     const linkedTasks = memo.taskIds.map((id) => findById(app.state.tasks, id)).filter(Boolean);
     const recordings = memo.recordings || [];
+    const attachments = getActiveAttachments("memo", memo.id);
     const previewText = getMemoPreviewText(memo);
     return `
       <article class="memo-card" data-card-action="edit-memo" data-id="${escapeAttr(memo.id)}" tabindex="0">
@@ -1324,6 +1366,7 @@
           ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
           ${linkedTasks.length ? `<span class="tag">関連タスク ${linkedTasks.length}</span>` : ""}
           ${recordings.length ? `<span class="tag">録音 ${recordings.length}</span>` : ""}
+          ${attachments.length ? `<span class="tag">添付 ${attachments.length}</span>` : ""}
           ${memo.createdAt ? `<span class="tag">作成 ${formatTimestampDate(memo.createdAt)}</span>` : ""}
           ${memo.updatedAt ? `<span class="tag">更新 ${formatTimestampDate(memo.updatedAt)}</span>` : ""}
         </div>
@@ -1347,9 +1390,54 @@
     `;
   }
 
+  function renderAttachmentPanel(ownerType, ownerId = "") {
+    const normalizedOwnerType = normalizeAttachmentOwnerType(ownerType);
+    const inputId = `attachmentInput-${normalizedOwnerType}-${ownerId || "new"}`;
+    const attachments = ownerId ? getActiveAttachments(normalizedOwnerType, ownerId) : [];
+    return `
+      <section class="attachment-panel" data-attachment-panel data-attachment-owner-type="${escapeAttr(normalizedOwnerType)}" data-attachment-owner-id="${escapeAttr(ownerId || "")}">
+        <div class="section-head">
+          <h2 class="section-title">添付</h2>
+          <span class="section-count">${attachments.length}件</span>
+        </div>
+        ${ownerId ? `
+          <div class="file-import-row attachment-add-row">
+            <label class="file-import-button" for="${escapeAttr(inputId)}">添付を追加</label>
+            <input id="${escapeAttr(inputId)}" type="file" multiple data-attachment-input data-ignore-snapshot>
+          </div>
+          <p class="form-hint">写真や資料を1ファイル${formatFileSize(ATTACHMENT_MAX_BYTES)}まで保存できます。</p>
+          <div class="attachment-list">
+            ${attachments.length ? attachments.map(renderAttachmentItem).join("") : `<p class="body-preview">添付ファイルはありません。</p>`}
+          </div>
+        ` : `<p class="form-hint">添付は保存後に追加できます。</p>`}
+      </section>
+    `;
+  }
+
+  function renderAttachmentItem(attachment) {
+    const url = attachment.dataUrl || "";
+    const isImage = attachment.mimeType.startsWith("image/") && url;
+    return `
+      <article class="attachment-item">
+        ${isImage
+          ? `<img class="attachment-thumb" src="${escapeAttr(url)}" alt="">`
+          : `<span class="attachment-file-icon" aria-hidden="true"></span>`}
+        <div class="attachment-main">
+          <strong>${escapeHtml(attachment.fileName || "添付ファイル")}</strong>
+          <span>${escapeHtml(attachment.mimeType || "application/octet-stream")} / ${formatFileSize(attachment.size)}</span>
+          <div class="attachment-actions">
+            ${url ? `<a class="text-button compact attachment-view-link" href="${escapeAttr(url)}" download="${escapeAttr(attachment.fileName || "attachment")}" target="_blank" rel="noopener">表示</a>` : ""}
+            <button class="text-button compact" type="button" data-action="delete-attachment" data-id="${escapeAttr(attachment.id)}">削除</button>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
   function renderPolicyCard(policy) {
     const department = findById(app.state.departments, policy.departmentId);
     const content = getPolicyContent(policy);
+    const attachments = getActiveAttachments("policy", policy.id);
     const colorClass = `period-line-${stableIndex(policy.id || policy.type, PERIOD_LINE_CLASS_COUNT)}`;
     return `
       <article class="policy-card" data-card-action="edit-policy" data-id="${escapeAttr(policy.id)}" tabindex="0">
@@ -1361,6 +1449,7 @@
           ${policy.periodStart ? `<span class="tag">${formatShortDate(policy.periodStart)}</span>` : ""}
           ${policy.periodEnd ? `<span class="tag">- ${formatShortDate(policy.periodEnd)}</span>` : ""}
           ${department ? `<span class="tag">${escapeHtml(department.name)}</span>` : ""}
+          ${attachments.length ? `<span class="tag">添付 ${attachments.length}</span>` : ""}
         </div>
         ${content ? `<p class="body-preview">${escapeHtml(truncate(content, 150))}</p>` : ""}
         <div class="card-actions">
@@ -1445,6 +1534,7 @@
     if (action === "toggle-task-memo-picker") toggleTaskMemoPicker(button);
     if (action === "toggle-memo-task-picker") toggleMemoTaskPicker(button);
     if (action === "toggle-memo-field-expand") toggleMemoFieldExpansion(button);
+    if (action === "delete-attachment") await deleteAttachment(id);
     if (action === "toggle-task") await toggleTask(id, button.dataset.date || "");
     if (action === "move-today") await moveTaskToToday(id);
     if (action === "assign-today-priority") await assignTaskToToday(id, button.dataset.priority);
@@ -1514,16 +1604,17 @@
       dialogId: target.id || "",
       formId: target.querySelector("form")?.id || "",
       entityId: target.querySelector("form")?.dataset.id || "",
-      scrollTop: sheet.scrollTop || 0
+      scrollTop: sheet.scrollTop || 0,
+      windowScrollY: window.scrollY || 0
     };
   }
 
   function restoreDialogScrollState(state) {
     if (!state) return;
     app.dialogScrollRestore = state;
-    requestAnimationFrame(() => {
+    const restoreToken = state;
+    const applyRestore = () => {
       const pending = app.dialogScrollRestore;
-      app.dialogScrollRestore = null;
       if (!pending) return;
       const dialog = pending.dialogId === "conflictDialog" ? conflictDialog : entityDialog;
       const form = dialog.querySelector("form");
@@ -1533,6 +1624,14 @@
       if (pending.entityId && form?.dataset.id !== pending.entityId) return;
       const maxScroll = Math.max(0, sheet.scrollHeight - sheet.clientHeight);
       sheet.scrollTop = clampNumber(pending.scrollTop, 0, maxScroll, 0);
+      if (typeof pending.windowScrollY === "number") window.scrollTo({ top: pending.windowScrollY, left: 0, behavior: "auto" });
+    };
+    requestAnimationFrame(() => {
+      applyRestore();
+      window.setTimeout(() => {
+        applyRestore();
+        if (app.dialogScrollRestore === restoreToken) app.dialogScrollRestore = null;
+      }, 120);
     });
   }
 
@@ -1585,6 +1684,10 @@
     }
     if (event.target.id === "memoAiImportFile") {
       await readMemoAiImportFile(event.target);
+      return;
+    }
+    if (event.target.matches("[data-attachment-input]")) {
+      await addAttachmentsFromInput(event.target);
       return;
     }
     if (event.target.id === "taskRecurrenceType") {
@@ -1915,6 +2018,7 @@
                 : `<span class="form-hint">関連メモの新規作成は、タスク保存後に使えます。</span>`}
             </div>
           </div>
+          ${renderAttachmentPanel("task", value.id)}
           <div class="field-inline task-owner-row">
             <div class="field">
               <label for="taskDepartment">${CLASSIFICATION_LABEL}</label>
@@ -2022,6 +2126,7 @@
               <textarea id="memoTranscript" name="transcript" placeholder="録音時の文字起こしや、別アプリで起こした全文をここに保存">${escapeHtml(value.transcript)}</textarea>
             </div>
           </details>
+          ${renderAttachmentPanel("memo", value.id)}
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
           </div>
@@ -2120,6 +2225,7 @@
             <label for="policyContent">内容</label>
             <textarea id="policyContent" name="content">${escapeHtml(value.content)}</textarea>
           </div>
+          ${renderAttachmentPanel("policy", value.id)}
           <div class="form-actions">
             <button class="solid-button" type="submit">保存</button>
           </div>
@@ -2167,7 +2273,7 @@
     const selectedDate = isIsoDate(value) ? value : "";
     const month = monthKey(dateObject(selectedDate || app.state.ui.selectedDate || todayIso()));
     return `
-      <div class="field task-date-picker" data-task-date-picker data-input-id="${escapeAttr(id)}" data-range-month="${escapeAttr(month)}" data-selected-date="${escapeAttr(selectedDate)}">
+      <div class="field task-date-picker" data-task-date-picker data-input-id="${escapeAttr(id)}" data-label="${escapeAttr(label)}" data-range-month="${escapeAttr(month)}" data-selected-date="${escapeAttr(selectedDate)}">
         <label for="${escapeAttr(id)}">${escapeHtml(label)}</label>
         <input id="${escapeAttr(id)}" name="${escapeAttr(name)}" type="hidden" value="${escapeAttr(selectedDate)}">
         <div class="task-date-display-row">
@@ -2327,6 +2433,7 @@
     refreshTaskDatePicker(picker);
     closeTaskDateCalendar(form);
     updateTaskPriorityPreview(form);
+    showToast(`${taskDatePickerToastLabel(picker)}を変更しました。`);
   }
 
   function clearTaskDate(button) {
@@ -2339,6 +2446,14 @@
     refreshTaskDatePicker(picker);
     if (form && getActiveTaskDatePicker(form) === picker) refreshTaskDateCalendar(form);
     updateTaskPriorityPreview(form);
+    showToast(`${taskDatePickerToastLabel(picker)}をクリアしました。`);
+  }
+
+  function taskDatePickerToastLabel(picker) {
+    const label = picker?.dataset.label || "";
+    if (label === "実施") return "実施日";
+    if (label === "DL") return "DL";
+    return label || "日付";
   }
 
   function refreshTaskDatePicker(picker) {
@@ -2418,6 +2533,7 @@
     setTaskTimeField(field, `${hour}:${minute}`);
     closeTaskTimePicker(panel);
     refreshTaskTimeSummary(panel);
+    showToast(`${taskTimeFieldToastLabel(field)}を変更しました。`);
   }
 
   function clearTaskTime(button) {
@@ -2427,6 +2543,13 @@
     setTaskTimeField(field, "");
     closeTaskTimePicker(panel);
     refreshTaskTimeSummary(panel);
+    showToast(`${taskTimeFieldToastLabel(field)}をクリアしました。`);
+  }
+
+  function taskTimeFieldToastLabel(field) {
+    if (field?.dataset.inputId === "taskStartTime") return "開始時刻";
+    if (field?.dataset.inputId === "taskEndTime") return "終了時刻";
+    return "時刻";
   }
 
   function setTaskTimeField(field, value) {
@@ -2970,10 +3093,12 @@
     const task = findById(app.state.tasks, id);
     if (!task) return;
     const now = nowIso();
+    let message = "タスクを完了にしました。";
     if (task.status === "completed") {
       removeGeneratedNextTask(task);
       task.status = "active";
       task.completedAt = null;
+      message = "タスクを未完了にしました。";
     } else {
       task.status = "completed";
       task.completedAt = now;
@@ -2982,6 +3107,7 @@
     markEntityChanged(task, task, now);
     await saveState();
     render();
+    showToast(message);
   }
 
   function createNextRecurringTask(task, completedDate) {
@@ -3156,6 +3282,84 @@
       item: deletedItem
     }, { syncStatus: "pending", deviceId: currentDeviceId(), now: deletedAt }));
     app.state.deletedItems = app.state.deletedItems.slice(0, 200);
+  }
+
+  async function addAttachmentsFromInput(input) {
+    const panel = input.closest("[data-attachment-panel]");
+    const ownerType = normalizeAttachmentOwnerType(panel?.dataset.attachmentOwnerType);
+    const ownerId = panel?.dataset.attachmentOwnerId || "";
+    const files = [...(input.files || [])];
+    input.value = "";
+    if (!ownerId) {
+      showToast("保存後に添付できます。");
+      return;
+    }
+    if (!files.length) return;
+    const oversized = files.filter((file) => file.size > ATTACHMENT_MAX_BYTES);
+    const accepted = files.filter((file) => file.size <= ATTACHMENT_MAX_BYTES);
+    if (oversized.length) {
+      showToast(`1ファイル${formatFileSize(ATTACHMENT_MAX_BYTES)}まで添付できます。`);
+    }
+    if (!accepted.length) return;
+    const changedAt = nowIso();
+    try {
+      for (const file of accepted) {
+        const dataUrl = await readFileAsDataUrl(file);
+        const attachment = markEntityChanged(normalizeAttachment({
+          id: uid("attachment"),
+          ownerType,
+          ownerId,
+          fileName: file.name || "添付ファイル",
+          mimeType: file.type || "application/octet-stream",
+          size: file.size,
+          dataUrl,
+          createdAt: changedAt,
+          updatedAt: changedAt
+        }, { syncStatus: "pending", deviceId: currentDeviceId(), now: changedAt }), null, changedAt);
+        app.state.attachments.push(attachment);
+      }
+      touchAttachmentOwner(ownerType, ownerId, changedAt);
+      await saveState();
+      render();
+      refreshAttachmentPanels(ownerType, ownerId);
+      showToast(accepted.length > 1 ? `${accepted.length}件の添付ファイルを追加しました。` : "添付ファイルを追加しました。");
+    } catch (error) {
+      showToast(`添付ファイルを追加できませんでした: ${error.message}`);
+    }
+  }
+
+  async function deleteAttachment(id) {
+    const attachment = findById(app.state.attachments || [], id);
+    if (!attachment || attachment.deletedAt) return;
+    const changedAt = nowIso();
+    markAttachmentDeleted(attachment, changedAt);
+    touchAttachmentOwner(attachment.ownerType, attachment.ownerId, changedAt);
+    await saveState();
+    render();
+    refreshAttachmentPanels(attachment.ownerType, attachment.ownerId);
+    showToast("添付ファイルを削除しました。");
+  }
+
+  function touchAttachmentOwner(ownerType, ownerId, changedAt = nowIso()) {
+    const collectionName = { task: "tasks", memo: "memos", policy: "policies" }[normalizeAttachmentOwnerType(ownerType)];
+    const owner = collectionName ? findById(app.state[collectionName] || [], ownerId) : null;
+    if (owner) markEntityChanged(owner, owner, changedAt);
+  }
+
+  function refreshAttachmentPanels(ownerType, ownerId) {
+    document.querySelectorAll("[data-attachment-panel]").forEach((panel) => {
+      if (panel.dataset.attachmentOwnerType !== ownerType || panel.dataset.attachmentOwnerId !== ownerId) return;
+      panel.outerHTML = renderAttachmentPanel(ownerType, ownerId);
+    });
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("ファイルを読み込めませんでした。"));
+      reader.readAsDataURL(file);
+    });
   }
 
   async function restoreDeletedItem(id) {
@@ -4337,33 +4541,48 @@
   }
 
   async function applyBundledTaskImport() {
-    try {
-      const response = await fetch(BUNDLED_TASK_IMPORT_URL, { cache: "no-store" });
-      if (!response.ok) return;
-      const payload = await response.json();
-      const importId = String(payload.importId || "");
-      if (!importId || app.state.settings.appliedTaskImportId === importId) return;
-
-      if (payload.fullSync) {
-        await createLocalBackup("before-sync");
-        replaceStateFromMasterPayload(payload, importId);
-        app.state.settings.appliedTaskImportId = importId;
-        await saveState();
-        showToast("マスターJSONでローカルデータを同期しました。");
+    for (const url of buildBundledMasterImportUrls()) {
+      try {
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) continue;
+        const payload = await response.json();
+        const importId = String(payload.importId || "");
+        if (!importId || app.state.settings.appliedTaskImportId === importId) return;
+        await applyBundledImportPayload(payload, importId);
         return;
+      } catch {
+        // 同梱インポートは初期投入用。失敗しても通常利用は止めない。
       }
+    }
+  }
 
-      const imported = importJson(JSON.stringify(payload));
-      if (!imported.tasks.length) return;
+  function buildBundledMasterImportUrls() {
+    const urls = [];
+    const today = todayIso();
+    for (let offset = 0; offset < BUNDLED_MASTER_IMPORT_LOOKBACK_DAYS; offset += 1) {
+      urls.push(`./data/claris-master-${addDays(today, -offset)}.json`);
+    }
+    return [...new Set(urls.concat(BUNDLED_MASTER_IMPORT_FALLBACK_URLS))];
+  }
+
+  async function applyBundledImportPayload(payload, importId) {
+    if (payload.fullSync) {
       await createLocalBackup("before-sync");
-      replaceTasksFromImport(imported.tasks, importId);
-      upsertPoliciesFromImport(imported.policies, nowIso(), "local-only");
+      replaceStateFromMasterPayload(payload, importId);
       app.state.settings.appliedTaskImportId = importId;
       await saveState();
-      showToast(`${imported.tasks.length}件のタスクを指定ファイルで上書きし、${imported.policies.length}件の運営情報を同期しました。`);
-    } catch {
-      // 同梱インポートは初期投入用。失敗しても通常利用は止めない。
+      showToast("マスターJSONでローカルデータを同期しました。");
+      return;
     }
+
+    const imported = importJson(JSON.stringify(payload));
+    if (!imported.tasks.length) return;
+    await createLocalBackup("before-sync");
+    replaceTasksFromImport(imported.tasks, importId);
+    upsertPoliciesFromImport(imported.policies, nowIso(), "local-only");
+    app.state.settings.appliedTaskImportId = importId;
+    await saveState();
+    showToast(`${imported.tasks.length}件のタスクを指定ファイルで上書きし、${imported.policies.length}件の運営情報を同期しました。`);
   }
 
   async function importText(raw) {
@@ -4409,6 +4628,7 @@
         Array.isArray(payload.tasks) ||
         Array.isArray(payload.memos) ||
         Array.isArray(payload.policies) ||
+        Array.isArray(payload.attachments) ||
         Array.isArray(payload.departments)
       )
     );
@@ -4469,6 +4689,7 @@
       tasks: app.state.tasks,
       memos: app.state.memos,
       policies: app.state.policies,
+      attachments: app.state.attachments,
       departments: app.state.departments,
       projects: app.state.projects
     };
@@ -4489,6 +4710,7 @@
     app.state.tasks = Array.isArray(payload.tasks) ? payload.tasks.map((task) => normalizeTask(task, metadataDefaults)) : app.state.tasks;
     app.state.memos = Array.isArray(payload.memos) ? payload.memos.map((memo) => normalizeMemo(memo, metadataDefaults)) : app.state.memos;
     app.state.policies = Array.isArray(payload.policies) ? payload.policies.map((policy) => normalizePolicy(policy, metadataDefaults)) : app.state.policies;
+    app.state.attachments = Array.isArray(payload.attachments) ? payload.attachments.map((attachment) => normalizeAttachment(attachment, metadataDefaults)) : app.state.attachments;
     app.state.departments = normalizeDepartments(payload.departments, app.state.departments, metadataDefaults);
     app.state.projects = [];
     app.state.deletedItems = Array.isArray(payload.deletedItems) ? payload.deletedItems.map((item) => normalizeDeletedItem(item, metadataDefaults)) : app.state.deletedItems;
@@ -4699,10 +4921,12 @@
   function buildPortableState(sourceState = app.state) {
     const source = sourceState || {};
     const memos = Array.isArray(source.memos) ? source.memos : [];
+    const attachments = Array.isArray(source.attachments) ? source.attachments : [];
     const deletedItems = Array.isArray(source.deletedItems) ? source.deletedItems : [];
     return {
       ...source,
       projects: [],
+      attachments: attachments.map(sanitizePortableAttachment),
       memos: memos.map((memo) => ({
         ...memo,
         recordings: (memo.recordings || []).map((recording) => ({
@@ -4719,6 +4943,13 @@
         item: sanitizePortableEntity(deleted.item)
       }))
     };
+  }
+
+  function sanitizePortableAttachment(attachment) {
+    if (!attachment || typeof attachment !== "object") return attachment;
+    if (!attachment.blob) return attachment;
+    const { blob, ...rest } = attachment;
+    return { ...rest, blobOmitted: true };
   }
 
   function sanitizePortableEntity(item) {
@@ -5549,6 +5780,17 @@
     });
   }
 
+  function getActiveAttachments(ownerType, ownerId) {
+    const normalizedOwnerType = normalizeAttachmentOwnerType(ownerType);
+    return (app.state.attachments || [])
+      .filter((attachment) =>
+        attachment.ownerType === normalizedOwnerType &&
+        attachment.ownerId === ownerId &&
+        !attachment.deletedAt
+      )
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  }
+
   function isDateInPolicy(date, policy) {
     if (!policy.periodStart && !policy.periodEnd) return false;
     const start = policy.periodStart || "0000-01-01";
@@ -5987,6 +6229,15 @@
     return snapshot;
   }
 
+  function markAttachmentDeleted(attachment, deletedAt = nowIso()) {
+    attachment.updatedAt = deletedAt;
+    attachment.deletedAt = deletedAt;
+    attachment.syncStatus = "pending";
+    attachment.deviceId = currentDeviceId() || attachment.deviceId || generateDeviceId();
+    attachment.version = normalizeEntityVersion(attachment.version) + 1;
+    return attachment;
+  }
+
   function normalizeSyncStatus(value, fallback = "local-only") {
     const status = String(value || "").trim();
     if (SYNC_STATUSES.has(status)) return status;
@@ -6048,6 +6299,13 @@
   function formatTimestampDate(value) {
     const date = localDateFromTimestamp(value);
     return date ? formatShortDate(date) : "";
+  }
+
+  function formatFileSize(bytes) {
+    const size = Number(bytes || 0);
+    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
+    if (size >= 1024) return `${Math.round(size / 1024)}KB`;
+    return `${Math.max(0, size)}B`;
   }
 
   function normalizePriority(value) {
