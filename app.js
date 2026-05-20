@@ -804,17 +804,20 @@
     const activeTasks = app.state.tasks.filter((task) => task.status === "active");
     const todayTasks = sortTasks(activeTasks.filter((task) => taskOccursOnDate(task, date) && !isTaskCompletedForDate(task, date)));
     const overdue = sortTasks(activeTasks.filter((task) => task.dueDate && task.dueDate < date && !taskOccursOnDate(task, date)));
+    const completedToday = sortTasks(app.state.tasks.filter((task) => isTaskCompletedForDate(task, date)));
     const relatedPolicies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
     const todayMemos = getTodayMemos(date);
     const activeTodayTab = normalizeUiTab(todayViewTabs, app.todayViewTab || "priority");
     app.todayViewTab = activeTodayTab;
-    const priorityCount = todayTasks.filter((task) => SINGLE_SLOT_PRIORITIES.includes(task.priority)).length + overdue.length;
     const subtaskTasks = todayTasks.filter((task) => task.priority === "SUB");
+    const completedPriorityTasks = completedToday.filter((task) => SINGLE_SLOT_PRIORITIES.includes(task.priority));
+    const completedSubtaskTasks = completedToday.filter((task) => task.priority === "SUB");
+    const priorityCount = todayTasks.filter((task) => SINGLE_SLOT_PRIORITIES.includes(task.priority)).length + overdue.length + completedPriorityTasks.length;
     const tabsWithCounts = todayViewTabs.map((item) => ({
       ...item,
       count: {
         priority: priorityCount,
-        subtasks: subtaskTasks.length,
+        subtasks: subtaskTasks.length + completedSubtaskTasks.length,
         memos: todayMemos.length,
         policies: relatedPolicies.length
       }[item.id]
@@ -823,18 +826,26 @@
     view.innerHTML = `
       <section class="today-tab-shell" data-ui-tab-scope="today-view" aria-label="今日の表示切替">
         ${renderUiTabs("today-view", tabsWithCounts, activeTodayTab, "今日の表示切替")}
-        ${renderUiTabPanel("today-view", "priority", activeTodayTab, renderTodayPriorityPanel(date, todayTasks, overdue), "today-tab-panel")}
-        ${renderUiTabPanel("today-view", "subtasks", activeTodayTab, renderTaskSection(priorityMeta.SUB.label, subtaskTasks, "サブタスクはありません", "", date), "today-tab-panel")}
+        ${renderUiTabPanel("today-view", "priority", activeTodayTab, renderTodayPriorityPanel(date, todayTasks, overdue, completedPriorityTasks), "today-tab-panel")}
+        ${renderUiTabPanel("today-view", "subtasks", activeTodayTab, renderTodaySubtaskPanel(date, subtaskTasks, completedSubtaskTasks), "today-tab-panel")}
         ${renderUiTabPanel("today-view", "memos", activeTodayTab, renderTodayMemoPanel(todayMemos), "today-tab-panel")}
         ${renderUiTabPanel("today-view", "policies", activeTodayTab, renderTodayPolicyPanel(relatedPolicies), "today-tab-panel")}
       </section>
     `;
   }
 
-  function renderTodayPriorityPanel(date, todayTasks, overdue) {
+  function renderTodayPriorityPanel(date, todayTasks, overdue, completedPriorityTasks) {
     return `
       ${overdue.length ? renderTaskSection("DL超過", overdue, "DLが過ぎています") : ""}
       ${renderTodayPriorityFocus(date, todayTasks)}
+      ${renderTaskSection("完了済み", completedPriorityTasks, "完了した優先タスクはありません", "", date)}
+    `;
+  }
+
+  function renderTodaySubtaskPanel(date, subtaskTasks, completedSubtaskTasks) {
+    return `
+      ${renderTaskSection(priorityMeta.SUB.label, subtaskTasks, "サブタスクはありません", "", date)}
+      ${renderTaskSection("完了済み", completedSubtaskTasks, "完了したサブタスクはありません", "", date)}
     `;
   }
 
