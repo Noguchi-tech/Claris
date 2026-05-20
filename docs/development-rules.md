@@ -103,3 +103,11 @@
 5. `local-only` を初回同期でどう扱うかを決める。
 6. API を `server.mjs` へ追加するか、別サーバーへ分けるか決める。
 7. 実装後も静的 PWA とオフライン利用が壊れていないことを確認する。
+
+## 10. リポジトリとミラー運用
+
+- 正式な開発ディレクトリは `/Users/noguchi_rl99/Development/Claris/Claris_app` とする。このディレクトリの `main` ブランチと `origin` remote を GitHub Pages 反映対象の source of truth として扱う。
+- `app.js`、`styles.css`、`index.html`、`manifest.webmanifest`、`sw.js`、`docs/` を別ディレクトリへ手動コピーしてミラーファイルを増やさない。
+- `/Users/noguchi_rl99/Documents/Codex/Claris`、`/Users/noguchi_rl99/Documents/GitHub/Claris`、iCloud Drive 配下、過去の `backups/` 配下は直接編集対象にしない。必要な内容がある場合は、本体リポジトリへ差分として取り込む。
+- GitHub clone は単一の source of truth に寄せる。複数 clone が見つかった場合は、削除前に remote、branch、最新 commit、主要ファイルのハッシュ、未コミット差分を確認し、本体と削除候補を明確に分けて報告する。
+- 配布用コピーやバックアップを作る必要がある場合は、用途、作成日、削除予定または保持理由を docs か作業メモに残し、実装対象と誤認しない名前にする。
