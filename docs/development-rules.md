@@ -1,6 +1,6 @@
 # Claris 開発ルール
 
-更新日: 2026-05-20  
+更新日: 2026-05-22  
 対象: `Claris_app`
 
 この文書は、今後 Claris を Codex で開発するときの標準ルールである。
@@ -10,7 +10,7 @@
 - 現行実装を壊さない。
 - 現在動いている静的 PWA 構造を優先する。
 - ローカル保存、オフライン利用、IndexedDB、Service Worker、JSON バックアップ導線を維持する。
-- UI の開閉記号は、表示を `+`、非表示を `-` に統一する。
+- UI の開閉記号は、開閉 UI が必要な場合のみ、表示を `+`、非表示を `-` に統一する。関連メモ/関連タスクのように今回開閉を廃止した欄へ新しい開閉 UI を戻さない。
 - 編集カードや今日画面をタブ UI にする場合は、タブ状態を一時 UI 状態として扱い、保存データ構造や同期対象データを不要に増やさない。
 - 大きな変更の前には、目的、影響範囲、差分方針を説明する。
 - 実装変更で要件や仕様が変わる場合は、docs も同じタイミングで更新する。
@@ -44,9 +44,12 @@
 - IndexedDB の既存データ構造を不用意に破壊しない。
 - 保存済みデータの互換性を保つため、内部キーの変更は原則避ける。
 - 既存の `createdAt`、`updatedAt` を維持する。
-- タスク関連メモの開閉 UI は保存データ構造に含めない。閉じた状態でも既存の `task.memoIds` とメモ同期処理が失われないよう、保存用 input は維持する。
+- タスク関連メモとメモ関連タスクは開閉 UI を持たせない。関連付けの検索、選択、解除は維持し、既存の `task.memoIds` / `memo.taskIds` と相互リンク同期処理が失われないよう、保存用 input は維持する。
 - 編集カードのタブ切替では、非表示タブ内の input / textarea / select / file input を無効化しない。関連メモ、関連タスク、添付、録音、文字起こし、AI整理JSON導線は、既存の保存・検証経路に乗せたままにする。
 - 優先度の色変更では `P1` / `P2` / `P3` / `SUB` の保存値、意味、順序を変更しない。
+- DL日として表示するカードや今日タブのDL関連専用エリアでは、右上ピルを `DL` にする。保存済み `priority` は変更しない。
+- 今日タブの優先タブでは、DL関連専用エリアを通常の P1/P2/P3 より上に置き、通常優先一覧との重複を避ける。
+- 完了アニメーションは DOM クラスによる一時状態に留める。`toggleTask()` の保存経路、`updatedAt`、`syncStatus`、`version` 更新を変えない。
 - 同期用メタ情報は `deletedAt`、`syncStatus`、`deviceId`、`version` を標準とする。
 - 添付ファイルは `attachments[]` に保存し、`ownerType`、`ownerId`、`fileName`、`mimeType`、`size`、`createdAt`、`updatedAt`、`deletedAt`、`syncStatus`、`deviceId`、`version`、`dataUrl` または `blob` を保持する。
 - 添付ファイルの削除は原則として論理削除に寄せ、ユーザーデータを自動で完全削除しない。
@@ -59,6 +62,9 @@
 ## 5. バックアップに関するルール
 
 - 同期処理の前には必ず `before-sync` バックアップを作成する。
+- PCバックアップ送信前には必ずローカル `before-sync` を作成する。作成に失敗した場合はPC送信や復元を進めない。
+- PCバックアップJSONは `data/backups/` に保存し、Git管理対象にしない。個人データを含むため静的配信からも読ませない。
+- GitHub Pages など HTTPS のPWAから HTTP の自宅PCへ接続する場合は、混在コンテンツやローカルネットワーク制限で失敗し得る。失敗時は編集を止めず、ローカル保存済みであることを短く通知する。
 - master JSON は `Claris_app/data/claris-master-YYYY-MM-DD.json` に配置する。起動時上書きに使う場合は `fullSync: true` と一意の `importId` を含め、反映前の `before-sync` バックアップ仕様を変えない。
 - 復元処理の前には必ず `before-restore` バックアップを作成する。
 - 同期メタ情報を既存 state へ補完する前には、可能な限り `before-metadata-migration` バックアップを作成する。
@@ -80,12 +86,13 @@
 
 ## 7. API に関するルール
 
-- 現行 `server.mjs` は静的配信と確認 API のみとする。
+- 現行 `server.mjs` は静的配信、確認 API、PCバックアップJSON API のみとする。Express / SQLite / Drizzle ORM は導入しない。
 - メモ AI 整理は、当面サーバー API や Claris 内 AI 処理を追加せず、AI 整理用 `.json` ファイル共有と、外部 LLM の JSON 回答を手動貼り付けまたは `.json` ファイル選択で検証する導線に留める。
 - `memo_ai_summary` 取り込みでは `clarisImportType`、`version`、`memoId`、`agendas` / `policies` / `actions` の文字列配列を必ず検証し、検証失敗時は保存データを変更しない。
 - AI 整理結果の反映では内部キー `agenda`、`decisions`、`nextActions` を維持し、表示上の項目記号 `■`、`●`、`・` と必要な句点補完だけを行う。
 - 同期 API を追加する前に `api-spec.md` を更新する。
 - 最小 API 案は `GET /api/sync/pull`、`POST /api/sync/push`、`POST /api/backup`、`GET /api/backup`、`POST /api/restore` とする。
+- 録音/文字起こしでは2時間動作を保証した表現をしない。`SpeechRecognition` は途中終了し得るため録音中は再開を試み、文字起こしドラフトをIndexedDBへ定期保存する。音声Blobが大きくなりすぎる場合は音声保存よりテキスト保護を優先する。
 - API 実装時も Express / SQLite / Drizzle ORM を最初から前提にしない。
 - 認証方式は初期同期設計では固定しない。
 

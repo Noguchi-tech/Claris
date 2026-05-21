@@ -3,17 +3,24 @@
 
   const DB_NAME = "claris-local-db";
   const DB_VERSION = 2;
-  const APP_VERSION = "2026.05.20-editor-tabs";
+  const APP_VERSION = "2026.05.22-ui-sync-recording";
   const STATE_SCHEMA_VERSION = 2;
   const STORE = "app";
   const BACKUP_STORE = "backups";
   const LOCAL_BACKUP_LIMIT = 10;
   const STATE_KEY = "state";
-  const LOCAL_BACKUP_TYPES = new Set(["before-sync", "before-restore", "before-metadata-migration"]);
+  const LOCAL_BACKUP_TYPES = new Set(["manual", "before-sync", "before-restore", "before-metadata-migration", "scheduled"]);
   const SYNC_STATUSES = new Set(["local-only", "pending", "synced", "conflict"]);
-  const SYNC_METADATA_COLLECTIONS = ["tasks", "memos", "policies", "departments", "attachments"];
+  const SYNC_METADATA_COLLECTIONS = ["tasks", "memos", "policies", "departments", "attachments", "deletedItems"];
+  const RECORDING_DRAFT_KEY = "recordingDraft";
+  const RECORDING_TIMESLICE_MS = 30 * 1000;
+  const RECORDING_DRAFT_SAVE_INTERVAL_MS = 15 * 1000;
+  const LONG_RECORDING_NOTICE_MS = 30 * 60 * 1000;
+  const MAX_RETAINED_RECORDING_BYTES = 80 * 1024 * 1024;
+  const PC_BACKUP_CONNECT_TIMEOUT_MS = 6000;
   const BUNDLED_MASTER_IMPORT_LOOKBACK_DAYS = 45;
   const BUNDLED_MASTER_IMPORT_FALLBACK_URLS = [
+    "./data/claris-master-2026-05-22.json",
     "./data/claris-master-2026-05-20.json",
     "./data/claris-master-2026-05-18.json",
     "./data/claris-master-2026-05-17.json"
@@ -156,6 +163,11 @@
     recordingTranscript: "",
     recordingInterimTranscript: "",
     recordingStream: null,
+    recordingBytes: 0,
+    recordingRetainAudio: true,
+    recordingDraftSaveTimer: 0,
+    recordingDraftSaveInterval: 0,
+    longRecordingNoticeTimer: 0,
     pendingRecordings: [],
     pendingRecordingTranscript: "",
     recordingStopPromise: null,
@@ -163,6 +175,8 @@
     recognition: null,
     recognitionStopPromise: null,
     recognitionStopResolve: null,
+    recognitionShouldRestart: false,
+    recognitionStopRequested: false,
     dialogOrigin: null,
     dialogBackTarget: null,
     pendingCloseRequest: null,
@@ -172,6 +186,7 @@
     settingsDrag: null,
     calendarInitialSelectionPending: true,
     todayViewTab: "priority",
+    pcBackupInFlight: false,
     isComposingText: false,
     toastTimer: 0,
     periodToastTimer: 0
@@ -192,6 +207,7 @@
     bindEvents();
     app.db = await openDatabase();
     app.state = await loadState();
+    await restoreRecordingDraftBackup();
     await applyBundledTaskImport();
     applyStartupUiPolicy();
     render();
@@ -217,6 +233,7 @@
     window.addEventListener("orientationchange", handleViewportChange);
     window.visualViewport?.addEventListener("resize", handleViewportChange);
     window.addEventListener("pagehide", stopAudioCaptureImmediately);
+    window.addEventListener("online", handleOnline);
   }
 
   function openDatabase() {
@@ -249,6 +266,15 @@
     return new Promise((resolve, reject) => {
       const tx = app.db.transaction(STORE, "readwrite");
       tx.objectStore(STORE).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  function dbDelete(key) {
+    return new Promise((resolve, reject) => {
+      const tx = app.db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).delete(key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -295,6 +321,18 @@
     const normalized = normalizeState(saved);
     if (needsMetadataMigration) await dbPut(STATE_KEY, normalized);
     return normalized;
+  }
+
+  async function restoreRecordingDraftBackup() {
+    try {
+      const draft = await dbGet(RECORDING_DRAFT_KEY);
+      const text = String(draft?.text || "").trim();
+      if (!text) return;
+      app.pendingRecordingTranscript = text;
+      showToast("前回の文字起こしドラフトを復元しました。保存先を確認してください。");
+    } catch {
+      // 文字起こしドラフトは保護用の補助データなので、読めなくても通常起動を優先する。
+    }
   }
 
   function applyStartupUiPolicy() {
@@ -359,6 +397,7 @@
     const backups = await dbGetAllBackups();
     const staleIds = backups
       .slice()
+      .filter((backup) => backup.type !== "manual")
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
       .slice(limit)
       .map((backup) => backup.id)
@@ -378,6 +417,10 @@
         workerName: "",
         showCompleted: true,
         showLinkedMemos: true,
+        backupServerUrl: "",
+        lastBackupConnectionAt: "",
+        lastBackupSyncAt: "",
+        lastBackupId: "",
         policyTypes: [...defaultPolicyTypes],
         appliedTaskImportId: ""
       },
@@ -803,16 +846,18 @@
     const date = todayIso();
     const activeTasks = app.state.tasks.filter((task) => task.status === "active");
     const todayTasks = sortTasks(activeTasks.filter((task) => taskOccursOnDate(task, date) && !isTaskCompletedForDate(task, date)));
-    const overdue = sortTasks(activeTasks.filter((task) => task.dueDate && task.dueDate < date && !taskOccursOnDate(task, date)));
+    const deadlineTasks = sortDeadlineTasks(app.state.tasks.filter((task) => isDeadlineAttentionTask(task, date)), date);
+    const deadlineTaskIds = new Set(deadlineTasks.map((task) => task.id));
+    const normalTodayTasks = todayTasks.filter((task) => !deadlineTaskIds.has(task.id));
     const completedToday = sortTasks(app.state.tasks.filter((task) => isTaskCompletedForDate(task, date)));
     const relatedPolicies = app.state.policies.filter((policy) => isDateInPolicy(date, policy));
     const todayMemos = getTodayMemos(date);
     const activeTodayTab = normalizeUiTab(todayViewTabs, app.todayViewTab || "priority");
     app.todayViewTab = activeTodayTab;
-    const subtaskTasks = todayTasks.filter((task) => task.priority === "SUB");
-    const completedPriorityTasks = completedToday.filter((task) => SINGLE_SLOT_PRIORITIES.includes(task.priority));
+    const subtaskTasks = normalTodayTasks.filter((task) => task.priority === "SUB");
+    const completedPriorityTasks = completedToday.filter((task) => SINGLE_SLOT_PRIORITIES.includes(task.priority) && !deadlineTaskIds.has(task.id));
     const completedSubtaskTasks = completedToday.filter((task) => task.priority === "SUB");
-    const priorityCount = todayTasks.filter((task) => SINGLE_SLOT_PRIORITIES.includes(task.priority)).length + overdue.length + completedPriorityTasks.length;
+    const priorityCount = normalTodayTasks.filter((task) => SINGLE_SLOT_PRIORITIES.includes(task.priority)).length + deadlineTasks.length + completedPriorityTasks.length;
     const tabsWithCounts = todayViewTabs.map((item) => ({
       ...item,
       count: {
@@ -826,7 +871,7 @@
     view.innerHTML = `
       <section class="today-tab-shell" data-ui-tab-scope="today-view" aria-label="今日の表示切替">
         ${renderUiTabs("today-view", tabsWithCounts, activeTodayTab, "今日の表示切替")}
-        ${renderUiTabPanel("today-view", "priority", activeTodayTab, renderTodayPriorityPanel(date, todayTasks, overdue, completedPriorityTasks), "today-tab-panel")}
+        ${renderUiTabPanel("today-view", "priority", activeTodayTab, renderTodayPriorityPanel(date, normalTodayTasks, deadlineTasks, completedPriorityTasks), "today-tab-panel")}
         ${renderUiTabPanel("today-view", "subtasks", activeTodayTab, renderTodaySubtaskPanel(date, subtaskTasks, completedSubtaskTasks), "today-tab-panel")}
         ${renderUiTabPanel("today-view", "memos", activeTodayTab, renderTodayMemoPanel(todayMemos), "today-tab-panel")}
         ${renderUiTabPanel("today-view", "policies", activeTodayTab, renderTodayPolicyPanel(relatedPolicies), "today-tab-panel")}
@@ -834,12 +879,31 @@
     `;
   }
 
-  function renderTodayPriorityPanel(date, todayTasks, overdue, completedPriorityTasks) {
+  function renderTodayPriorityPanel(date, todayTasks, deadlineTasks, completedPriorityTasks) {
     return `
-      ${overdue.length ? renderTaskSection("DL超過", overdue, "DLが過ぎています") : ""}
+      ${deadlineTasks.length ? renderTaskSection("本日DL・DL超過", deadlineTasks, "DL確認が必要なタスクはありません", "", date, { cardOptions: { forceDuePill: true, showCompletedState: true }, className: "deadline-section" }) : ""}
       ${renderTodayPriorityFocus(date, todayTasks)}
       ${renderTaskSection("完了済み", completedPriorityTasks, "完了した優先タスクはありません", "", date)}
     `;
+  }
+
+  function isDeadlineAttentionTask(task, date) {
+    if (!task?.dueDate) return false;
+    if (task.dueDate < date) return task.status === "active";
+    if (task.dueDate === date) return true;
+    return false;
+  }
+
+  function sortDeadlineTasks(tasks, date) {
+    return [...tasks].sort((a, b) =>
+      deadlineBucket(a, date) - deadlineBucket(b, date) ||
+      String(a.dueDate || "9999-12-31").localeCompare(String(b.dueDate || "9999-12-31")) ||
+      String(a.createdAt || "").localeCompare(String(b.createdAt || ""))
+    );
+  }
+
+  function deadlineBucket(task, date) {
+    return task.dueDate && task.dueDate < date ? 0 : 1;
   }
 
   function renderTodaySubtaskPanel(date, subtaskTasks, completedSubtaskTasks) {
@@ -1022,7 +1086,7 @@
     const selectedTasks = sortCalendarTasks(app.state.tasks.filter((task) =>
       matchesCalendarTaskFilter(task, filter) &&
       ((task.status === "active" && taskOccursOnDate(task, selectedDate)) || task.dueDate === selectedDate)
-    ));
+    ), selectedDate);
     const selectedPolicies = app.state.policies.filter((policy) =>
       matchesCalendarPolicyFilter(policy, filter) && isDateInPolicy(selectedDate, policy)
     );
@@ -1057,7 +1121,7 @@
       task.status === "active" && taskOccursOnDate(task, iso) && !isTaskCompletedForDate(task, iso) && matchesCalendarTaskFilter(task, filter)
     );
     const dueTasks = app.state.tasks.filter((task) =>
-      task.status === "active" && task.dueDate === iso && matchesCalendarTaskFilter(task, filter)
+      task.dueDate === iso && matchesCalendarTaskFilter(task, filter)
     );
     const classes = [
       "day-cell",
@@ -1436,15 +1500,16 @@
     `);
   }
 
-  function renderTaskSection(title, tasks, emptyText, actionHtml = "", contextDate = "") {
+  function renderTaskSection(title, tasks, emptyText, actionHtml = "", contextDate = "", options = {}) {
+    const sectionClass = ["section", options.className || ""].filter(Boolean).join(" ");
     return `
-      <section class="section">
+      <section class="${sectionClass}">
         <div class="section-head">
           <h2 class="section-title">${escapeHtml(title)}</h2>
           <span class="section-count">${tasks.length}件</span>
         </div>
         <div class="task-list">
-          ${tasks.length ? tasks.map((task) => renderTaskCard(task, contextDate)).join("") : renderEmpty(emptyText, "", actionHtml)}
+          ${tasks.length ? tasks.map((task) => renderTaskCard(task, contextDate, options.cardOptions || {})).join("") : renderEmpty(emptyText, "", actionHtml)}
         </div>
       </section>
     `;
@@ -1455,7 +1520,7 @@
     return `<div class="empty-state"><p>${escapeHtml(text)}</p><div class="card-actions">${actionHtml}${addButton}</div></div>`;
   }
 
-  function renderTaskCard(task, contextDate = "") {
+  function renderTaskCard(task, contextDate = "", options = {}) {
     const priority = priorityMeta[task.priority] || priorityMeta.SUB;
     const department = findById(app.state.departments, task.departmentId);
     const linkedMemos = getLinkedMemos(task);
@@ -1468,11 +1533,13 @@
           </button>
         `).join("")}</div>`
       : "";
-    const completed = isTaskCompletedForDate(task, contextDate);
+    const completed = options.showCompletedState && task.status === "completed"
+      ? true
+      : isTaskCompletedForDate(task, contextDate);
     const recurrence = recurrenceLabel(task);
     const dateAttr = contextDate ? ` data-date="${escapeAttr(contextDate)}"` : "";
-    const showPendingDuePill = completed && task.dueDate && task.dueDate > todayIso();
-    const headerPill = showPendingDuePill
+    const showDuePill = options.forceDuePill || isDueDateDisplayContext(task, contextDate) || (completed && task.dueDate && task.dueDate > todayIso());
+    const headerPill = showDuePill
       ? `<span class="priority-pill due-pill">DL</span>`
       : `<span class="priority-pill ${priority.className}">${priority.label}</span>`;
     return `
@@ -1503,6 +1570,10 @@
         </div>
       </article>
     `;
+  }
+
+  function isDueDateDisplayContext(task, contextDate = "") {
+    return Boolean(task?.dueDate && contextDate && task.dueDate === contextDate && task.actionDate !== contextDate);
   }
 
   function renderMemoCard(memo) {
@@ -1693,7 +1764,7 @@
     if (action === "toggle-memo-task-picker") toggleMemoTaskPicker(button);
     if (action === "toggle-memo-field-expand") toggleMemoFieldExpansion(button);
     if (action === "delete-attachment") await deleteAttachment(id);
-    if (action === "toggle-task") await toggleTask(id, button.dataset.date || "");
+    if (action === "toggle-task") await toggleTask(id, button.dataset.date || "", button);
     if (action === "move-today") await moveTaskToToday(id);
     if (action === "assign-today-priority") await assignTaskToToday(id, button.dataset.priority);
     if (action === "duplicate-task") await duplicateTask(id);
@@ -1726,6 +1797,10 @@
     if (action === "export-json") exportJson();
     if (action === "export-master-json") exportMasterJson();
     if (action === "run-import") await runImportFromDialog();
+    if (action === "test-backup-server") await testBackupServer();
+    if (action === "send-pc-backup") await sendPcBackupNow();
+    if (action === "load-pc-backups") await loadPcBackupList();
+    if (action === "restore-pc-backup") await restorePcBackup(id);
     if (action === "add-department") addSettingsRow("department");
     if (action === "add-policy-type") addSettingsRow("policyType");
     if (action === "toggle-settings-panel") toggleSettingsPanel(button);
@@ -2143,12 +2218,12 @@
             ${renderTaskDatePicker("dueDate", "taskDueDate", "DL", value.dueDate)}
           </div>
           ${renderTaskSharedDateCalendar(value.actionDate || value.dueDate)}
-          ${renderTaskTimePanel(value.startTime, value.endTime)}
           <div class="field">
             <label>優先度の空き状況</label>
             <input id="taskPriority" name="priority" type="hidden" value="${escapeAttr(value.priority)}">
             <div id="priorityAvailability" class="priority-availability" aria-live="polite"></div>
           </div>
+          ${renderTaskTimePanel(value.startTime, value.endTime)}
           ${renderRecurrenceFields(value.recurrence)}
         `)}
         ${renderUiTabPanel("task-editor", "materials", active, `
@@ -2987,6 +3062,7 @@
     conflictDialog.innerHTML = `
       <div class="sheet">
         ${renderSheetHeader("優先度の入れ替え", `${formatShortDate(task.actionDate)} の ${priorityMeta[task.priority].label} には既存タスクがあります。`)}
+        <p class="form-hint conflict-guide">既にあるタスクの移動先を選んでください。新しいタスクは選択中の枠に保存され、既存タスクの内容は削除されません。</p>
         <div class="conflict-compare">
           <section class="conflict-panel conflict-task-panel conflict-new">
             <span class="conflict-label">入れたいタスク</span>
@@ -3004,15 +3080,7 @@
           </section>
         </div>
         <div class="conflict-actions">
-          <button class="choice-button conflict-action-button" type="button" data-action="resolve-conflict" data-mode="new-available">
-            <strong>新規を空き枠へ</strong>
-            <span>${priorityMeta[availablePriority].label} に新規タスクを保存する</span>
-          </button>
           <section class="conflict-move-box">
-            <button class="choice-button conflict-action-button" type="button" data-action="resolve-conflict" data-mode="move-existing">
-              <strong>既存を移動して入れる</strong>
-              <span>既存タスクを下の移動先へ移し、新規タスクを選択中の枠へ入れる</span>
-            </button>
             <div class="conflict-move-controls">
               <div class="field">
                 <label for="conflictMoveDate">既存の移動日</label>
@@ -3025,6 +3093,9 @@
               </div>
             </div>
           </section>
+          <button class="solid-button conflict-action-button" type="button" data-action="resolve-conflict" data-mode="move-existing">
+            移動先を決定
+          </button>
           <button class="choice-button conflict-back-button" type="button" data-action="back-to-task-form">
             <strong>戻って修正</strong>
             <span>日付や優先度を自分で選び直す</span>
@@ -3057,7 +3128,7 @@
     }
     app.pendingConflict = null;
     closeDialogs();
-    await saveTaskWithConflict(task, context, mode || "new-available");
+    await saveTaskWithConflict(task, context, mode || "move-existing");
   }
 
   function updateConflictMovePreview() {
@@ -3084,10 +3155,6 @@
   }
 
   function applyConflictMode(task, conflicts, context, mode) {
-    if (mode === "new-available") {
-      task.priority = findAvailablePriority(task.actionDate, task.id, [task.priority]);
-      return true;
-    }
     if (mode === "move-existing") {
       const now = nowIso();
       conflicts.forEach((existing) => {
@@ -3192,6 +3259,11 @@
     } else {
       closeDialogs();
       render();
+    }
+    if (options.includeRecordingDrafts) {
+      app.pendingRecordings = [];
+      app.pendingRecordingTranscript = "";
+      await clearRecordingDraftBackup();
     }
     if (options.toastMessage !== false) showToast(options.toastMessage || "メモを保存しました。");
     return memo;
@@ -3300,11 +3372,13 @@
     showToast("運営情報を保存しました。");
   }
 
-  async function toggleTask(id, date = "") {
+  async function toggleTask(id, date = "", trigger = null) {
     const task = findById(app.state.tasks, id);
     if (!task) return;
     const now = nowIso();
     let message = "タスクを完了にしました。";
+    const completing = task.status !== "completed";
+    const animationTarget = completing ? markTaskCompletionAnimation(trigger) : null;
     if (task.status === "completed") {
       removeGeneratedNextTask(task);
       task.status = "active";
@@ -3317,8 +3391,33 @@
     }
     markEntityChanged(task, task, now);
     await saveState();
+    if (completing) await finishTaskCompletionAnimation(animationTarget);
     render();
     showToast(message);
+  }
+
+  function markTaskCompletionAnimation(trigger) {
+    if (!trigger || prefersReducedMotion()) return null;
+    const target = trigger.closest(".task-card, .priority-focus-slot");
+    if (!target) return null;
+    target.classList.add("is-completing");
+    trigger.classList.add("is-completed", "is-pressing");
+    window.requestAnimationFrame(() => {
+      target.classList.add("is-completion-confirmed");
+      trigger.classList.remove("is-pressing");
+    });
+    return target;
+  }
+
+  async function finishTaskCompletionAnimation(target) {
+    if (!target || prefersReducedMotion()) return;
+    await wait(260);
+    target.classList.add("is-completion-exit");
+    await wait(360);
+  }
+
+  function prefersReducedMotion() {
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches || false;
   }
 
   function createNextRecurringTask(task, completedDate) {
@@ -4185,6 +4284,7 @@
     textarea.value = "";
     app.pendingRecordings = [];
     app.pendingRecordingTranscript = "";
+    await clearRecordingDraftBackup();
     updateTranscriptPreview("");
     await saveState();
     render();
@@ -4201,19 +4301,22 @@
       app.recordingChunks = [];
       app.mediaRecorder = new MediaRecorder(app.recordingStream);
       app.recordingStartedAt = Date.now();
+      app.recordingBytes = 0;
+      app.recordingRetainAudio = true;
       const textarea = document.getElementById("quickMemoText") || document.getElementById("memoBody") || document.getElementById("memoTranscript");
       app.recordingBaseText = textarea?.value.trim() || "";
       app.recordingTranscript = "";
       app.recordingInterimTranscript = "";
       updateTranscriptPreview(getRecordingPreviewText());
       app.mediaRecorder.addEventListener("dataavailable", (event) => {
-        if (event.data.size) app.recordingChunks.push(event.data);
+        retainRecordingChunk(event.data);
       });
       app.recordingStopPromise = new Promise((resolve) => {
         app.recordingStopResolve = resolve;
       });
       app.mediaRecorder.addEventListener("stop", finalizeStoppedRecording);
-      app.mediaRecorder.start();
+      app.mediaRecorder.start(RECORDING_TIMESLICE_MS);
+      startRecordingDraftProtection();
       const transcriptionStarted = startTranscription({ recording: true });
       updateRecordingButtons(transcriptionStarted ? "録音中 / 文字起こし中" : "録音中（文字起こし非対応）");
     } catch {
@@ -4247,10 +4350,10 @@
   async function finalizeStoppedRecording() {
     await wait(300);
     const mimeType = app.mediaRecorder?.mimeType || "audio/webm";
-    const blob = new Blob(app.recordingChunks, { type: mimeType });
+    const blob = app.recordingRetainAudio ? new Blob(app.recordingChunks, { type: mimeType }) : null;
     const transcript = appendText(app.recordingTranscript, app.recordingInterimTranscript).trim();
     const durationSeconds = Math.round((Date.now() - app.recordingStartedAt) / 1000);
-    if (blob.size) {
+    if (blob?.size) {
       app.pendingRecordings.push({
         id: uid("audio"),
         name: `${formatLongDate(todayIso())} ${durationSeconds}秒`,
@@ -4263,13 +4366,17 @@
     if (transcript) {
       app.pendingRecordingTranscript = appendText(app.pendingRecordingTranscript, transcript);
     }
+    await persistRecordingDraftBackup();
     stopRecordingStream();
+    stopRecordingDraftProtection();
     app.mediaRecorder = null;
     app.recordingChunks = [];
     app.recordingStartedAt = 0;
     app.recordingBaseText = "";
     app.recordingTranscript = "";
     app.recordingInterimTranscript = "";
+    app.recordingBytes = 0;
+    app.recordingRetainAudio = true;
     updateTranscriptPreview(getRecordingPreviewText());
     updateRecordingButtons(app.pendingRecordings.length ? "録音停止済み（保存待ち）" : "");
     app.recordingStopResolve?.();
@@ -4290,6 +4397,8 @@
     recognition.lang = "ja-JP";
     recognition.continuous = true;
     recognition.interimResults = true;
+    app.recognitionShouldRestart = Boolean(options.recording);
+    app.recognitionStopRequested = false;
     app.recognitionStopPromise = new Promise((resolve) => {
       app.recognitionStopResolve = resolve;
     });
@@ -4306,6 +4415,7 @@
           app.recordingTranscript = appendText(app.recordingTranscript, finalText);
           app.recordingInterimTranscript = "";
           updateTranscriptPreview(getRecordingPreviewText());
+          scheduleRecordingDraftBackup();
         } else {
           textarea.value = `${textarea.value}${textarea.value ? "\n" : ""}${finalText}`;
         }
@@ -4313,6 +4423,7 @@
       if (options.recording) {
         app.recordingInterimTranscript = interimText.trim();
         updateTranscriptPreview(getRecordingPreviewText());
+        if (interimText.trim()) scheduleRecordingDraftBackup();
       }
       updateRecordingButtons(options.recording
         ? (interimText ? `録音中: ${interimText}` : "録音中 / 文字起こし中")
@@ -4323,6 +4434,13 @@
       app.recognitionStopResolve?.();
       app.recognitionStopPromise = null;
       app.recognitionStopResolve = null;
+      if (app.recognitionShouldRestart && !app.recognitionStopRequested && app.mediaRecorder && app.mediaRecorder.state !== "inactive") {
+        window.setTimeout(() => {
+          if (app.mediaRecorder && app.mediaRecorder.state !== "inactive" && !app.recognition) startTranscription({ recording: true, restarted: true });
+        }, 700);
+        updateRecordingButtons("録音中 / 文字起こしを継続準備中");
+        return;
+      }
       updateRecordingButtons();
     });
     try {
@@ -4345,6 +4463,8 @@
     const recognition = app.recognition;
     const stopPromise = app.recognitionStopPromise;
     app.recognition = null;
+    app.recognitionStopRequested = true;
+    app.recognitionShouldRestart = false;
     if (recognition) {
       try {
         if (options.abort && typeof recognition.abort === "function") recognition.abort();
@@ -4382,12 +4502,15 @@
   function resetRecordingDraft() {
     stopTranscription({ abort: true });
     stopRecordingStream();
+    stopRecordingDraftProtection();
     app.mediaRecorder = null;
     app.recordingChunks = [];
     app.recordingStartedAt = 0;
     app.recordingBaseText = "";
     app.recordingTranscript = "";
     app.recordingInterimTranscript = "";
+    app.recordingBytes = 0;
+    app.recordingRetainAudio = true;
     app.pendingRecordings = [];
     app.pendingRecordingTranscript = "";
     app.recordingStopPromise = null;
@@ -4396,6 +4519,7 @@
     app.recognitionStopResolve = null;
     updateTranscriptPreview("");
     updateRecordingButtons();
+    clearRecordingDraftBackup();
   }
 
   function stopRecordingStream() {
@@ -4412,6 +4536,8 @@
       } catch {}
     }
     stopRecordingStream();
+    stopRecordingDraftProtection();
+    persistRecordingDraftBackup();
   }
 
   function appendText(base, addition) {
@@ -4511,6 +4637,24 @@
             <textarea id="settingsImportText" name="settingsImportText" placeholder="JSON / CSV / テキストを貼り付け"></textarea>
             <button class="ghost-button" type="button" data-action="run-import">内容を取り込む</button>
           </section>
+          <section class="settings-block">
+            <div class="section-head">
+              <h2 class="section-title">PCバックアップ</h2>
+              <span class="section-count">${app.state.settings.lastBackupSyncAt ? formatTimestampDate(app.state.settings.lastBackupSyncAt) : "未同期"}</span>
+            </div>
+            <div class="field">
+              <label for="backupServerUrl">バックアップサーバーURL</label>
+              <input id="backupServerUrl" name="backupServerUrl" value="${escapeAttr(app.state.settings.backupServerUrl || "")}" placeholder="http://192.168.x.x:4173" autocomplete="off" inputmode="url">
+              <p class="form-hint">同一Wi-Fi上でPC側サーバーが起動している時だけ接続できます。未接続時もローカル保存は継続します。</p>
+            </div>
+            <div class="card-actions backup-actions">
+              <button class="mini-button" type="button" data-action="test-backup-server">接続テスト</button>
+              <button class="mini-button" type="button" data-action="send-pc-backup">今すぐバックアップ</button>
+              <button class="mini-button" type="button" data-action="load-pc-backups">復元一覧</button>
+            </div>
+            <p id="backupStatus" class="form-hint backup-status">${renderBackupStatusText()}</p>
+            <div id="backupList" class="backup-list"></div>
+          </section>
           <section class="settings-block settings-collapsible">
             <div class="section-head">
               <button class="collapse-toggle" type="button" data-action="toggle-settings-panel" data-target="deletedRows" aria-expanded="false">
@@ -4576,6 +4720,292 @@
     `;
   }
 
+  function renderBackupStatusText() {
+    const connected = app.state.settings.lastBackupConnectionAt
+      ? `最終接続 ${formatTimestampDate(app.state.settings.lastBackupConnectionAt)}`
+      : "接続テスト未実施";
+    const synced = app.state.settings.lastBackupSyncAt
+      ? `最終バックアップ ${formatTimestampDate(app.state.settings.lastBackupSyncAt)}`
+      : "PCバックアップ未実施";
+    return `${connected} / ${synced}`;
+  }
+
+  function setBackupStatus(text) {
+    const status = document.getElementById("backupStatus");
+    if (status) status.textContent = text;
+  }
+
+  function getBackupServerUrlFromForm() {
+    const formValue = document.getElementById("backupServerUrl")?.value;
+    return normalizeBackupServerUrl(formValue || app.state.settings.backupServerUrl || "");
+  }
+
+  function normalizeBackupServerUrl(value) {
+    const text = String(value || "").trim().replace(/\/+$/, "");
+    if (!text) return "";
+    if (!/^https?:\/\//i.test(text)) return `http://${text}`;
+    return text;
+  }
+
+  async function backupApiFetch(path, options = {}) {
+    const baseUrl = getBackupServerUrlFromForm();
+    if (!baseUrl) throw new Error("バックアップサーバーURLを入力してください。");
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), PC_BACKUP_CONNECT_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        ...options,
+        cache: "no-store",
+        signal: controller.signal,
+        headers: {
+          ...(options.body ? { "content-type": "application/json" } : {}),
+          ...(options.headers || {})
+        }
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) throw new Error(payload.error || `HTTP ${response.status}`);
+      return payload;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  function retainRecordingChunk(blob) {
+    if (!blob?.size) return;
+    app.recordingBytes += blob.size;
+    if (app.recordingRetainAudio && app.recordingBytes <= MAX_RETAINED_RECORDING_BYTES) {
+      app.recordingChunks.push(blob);
+      return;
+    }
+    if (app.recordingRetainAudio) {
+      app.recordingRetainAudio = false;
+      app.recordingChunks = [];
+      showToast("録音データが大きいため、この回は音声保存を止め、文字起こし保存を優先します。");
+    }
+  }
+
+  function startRecordingDraftProtection() {
+    stopRecordingDraftProtection();
+    app.recordingDraftSaveInterval = window.setInterval(() => {
+      persistRecordingDraftBackup();
+    }, RECORDING_DRAFT_SAVE_INTERVAL_MS);
+    app.longRecordingNoticeTimer = window.setTimeout(() => {
+      showToast("長時間録音中です。画面ロックやバックグラウンドでは停止することがあります。こまめに保存してください。");
+    }, LONG_RECORDING_NOTICE_MS);
+    scheduleRecordingDraftBackup();
+  }
+
+  function stopRecordingDraftProtection() {
+    if (app.recordingDraftSaveTimer) window.clearTimeout(app.recordingDraftSaveTimer);
+    if (app.recordingDraftSaveInterval) window.clearInterval(app.recordingDraftSaveInterval);
+    if (app.longRecordingNoticeTimer) window.clearTimeout(app.longRecordingNoticeTimer);
+    app.recordingDraftSaveTimer = 0;
+    app.recordingDraftSaveInterval = 0;
+    app.longRecordingNoticeTimer = 0;
+  }
+
+  function scheduleRecordingDraftBackup() {
+    if (app.recordingDraftSaveTimer) window.clearTimeout(app.recordingDraftSaveTimer);
+    app.recordingDraftSaveTimer = window.setTimeout(() => {
+      app.recordingDraftSaveTimer = 0;
+      persistRecordingDraftBackup();
+    }, 900);
+  }
+
+  async function persistRecordingDraftBackup() {
+    const text = getRecordingPreviewText().trim();
+    if (!text) return;
+    try {
+      await dbPut(RECORDING_DRAFT_KEY, {
+        id: "recording-draft",
+        updatedAt: nowIso(),
+        text,
+        context: getRecordingDraftContext()
+      });
+    } catch {
+      // 録音中はUI停止を避けるため、ドラフト保存失敗は次回周期で再試行する。
+    }
+  }
+
+  function getRecordingDraftContext() {
+    const form = entityDialog?.querySelector("form");
+    return {
+      activeTab: app.state?.ui?.activeTab || "",
+      formId: form?.id || "",
+      entityId: form?.dataset?.id || ""
+    };
+  }
+
+  async function clearRecordingDraftBackup() {
+    try {
+      await dbDelete(RECORDING_DRAFT_KEY);
+    } catch {
+      // 保護用ドラフトの削除失敗は通常保存を止めない。
+    }
+  }
+
+  async function testBackupServer() {
+    try {
+      setBackupStatus("接続を確認しています...");
+      const payload = await backupApiFetch("/api/health");
+      const now = nowIso();
+      app.state.settings.backupServerUrl = getBackupServerUrlFromForm();
+      app.state.settings.lastBackupConnectionAt = now;
+      await saveState();
+      setBackupStatus(`接続OK: ${payload.app || "Claris"} / ${formatTimestampDate(now)}`);
+      showToast("PCバックアップサーバーに接続できました。");
+    } catch (error) {
+      setBackupStatus("PCバックアップ未接続。ローカル保存済みのまま利用できます。");
+      showToast(`PCバックアップ未接続: ${error.message}`);
+    }
+  }
+
+  async function sendPcBackupNow() {
+    if (app.pcBackupInFlight) return;
+    app.pcBackupInFlight = true;
+    try {
+      setBackupStatus("PCへバックアップしています...");
+      await createLocalBackup("before-sync");
+      const backup = await createLocalBackup("manual");
+      const payload = await backupApiFetch("/api/backup", {
+        method: "POST",
+        body: JSON.stringify({
+          backup,
+          state: buildPortableState(),
+          requestedAt: nowIso()
+        })
+      });
+      const now = nowIso();
+      markAllSyncTargetsSynced();
+      app.state.settings.backupServerUrl = getBackupServerUrlFromForm();
+      app.state.settings.lastBackupConnectionAt = now;
+      app.state.settings.lastBackupSyncAt = now;
+      app.state.settings.lastBackupId = payload.backup?.id || backup.id;
+      await saveState();
+      setBackupStatus(`PCバックアップ完了: ${formatTimestampDate(now)}`);
+      showToast("PCへバックアップしました。");
+    } catch (error) {
+      setBackupStatus("PCバックアップ未接続。ローカル保存済みです。");
+      showToast(`PCバックアップ未接続。ローカル保存済み: ${error.message}`);
+    } finally {
+      app.pcBackupInFlight = false;
+    }
+  }
+
+  async function loadPcBackupList() {
+    try {
+      setBackupStatus("バックアップ一覧を取得しています...");
+      const payload = await backupApiFetch("/api/backup");
+      renderPcBackupList(payload.backups || []);
+      setBackupStatus(`バックアップ ${payload.backups?.length || 0}件を取得しました。`);
+    } catch (error) {
+      renderPcBackupList([]);
+      setBackupStatus("PCバックアップ一覧を取得できませんでした。");
+      showToast(`PCバックアップ未接続: ${error.message}`);
+    }
+  }
+
+  function renderPcBackupList(backups) {
+    const target = document.getElementById("backupList");
+    if (!target) return;
+    if (!backups.length) {
+      target.innerHTML = `<p class="body-preview">PC側のバックアップはまだありません。</p>`;
+      return;
+    }
+    target.innerHTML = backups.slice(0, 10).map((backup) => `
+      <div class="backup-row">
+        <div>
+          <strong>${escapeHtml(formatTimestampDate(backup.createdAt || ""))}</strong>
+          <span>${escapeHtml(backup.type || backup.reason || "backup")} / ${escapeHtml(formatBackupCounts(backup.counts))}</span>
+        </div>
+        <button class="mini-button" type="button" data-action="restore-pc-backup" data-id="${escapeAttr(backup.id || backup.backupId || "")}">復元</button>
+      </div>
+    `).join("");
+  }
+
+  function formatBackupCounts(counts = {}) {
+    return `タスク${Number(counts.tasks || 0)} / メモ${Number(counts.memos || 0)} / 運営${Number(counts.policies || 0)}`;
+  }
+
+  async function restorePcBackup(backupId) {
+    if (!backupId) return;
+    if (!window.confirm("現在のデータをローカル退避してから、選択したPCバックアップで復元します。続けますか？")) return;
+    try {
+      setBackupStatus("復元前バックアップを作成しています...");
+      await createLocalBackup("before-restore");
+      const payload = await backupApiFetch("/api/restore", {
+        method: "POST",
+        body: JSON.stringify({ backupId, restoreRequestedAt: nowIso() })
+      });
+      const restoredState = extractStateFromBackupPayload(payload);
+      const currentSettings = { ...app.state.settings };
+      const restored = normalizeState({
+        ...restoredState,
+        settings: {
+          ...(restoredState.settings || {}),
+          deviceId: currentSettings.deviceId || restoredState.settings?.deviceId || generateDeviceId(),
+          backupServerUrl: getBackupServerUrlFromForm(),
+          lastBackupConnectionAt: currentSettings.lastBackupConnectionAt || "",
+          lastBackupSyncAt: currentSettings.lastBackupSyncAt || "",
+          lastBackupId: currentSettings.lastBackupId || ""
+        }
+      });
+      markRestoredStatePending(restored);
+      app.state = restored;
+      await saveState();
+      closeDialogs();
+      render();
+      showToast("PCバックアップから復元しました。");
+    } catch (error) {
+      setBackupStatus("復元できませんでした。現在データは維持されています。");
+      showToast(`復元できませんでした: ${error.message}`);
+    }
+  }
+
+  function extractStateFromBackupPayload(payload) {
+    const source = payload.state || payload.backup?.state || payload.backup || {};
+    if (typeof source.payloadJson === "string") return JSON.parse(source.payloadJson);
+    if (source.state && typeof source.state === "object") return source.state;
+    if (source.payload && typeof source.payload === "object") return source.payload;
+    if (source.tasks || source.memos || source.policies) return source;
+    throw new Error("バックアップ内に復元できるstateがありません。");
+  }
+
+  function markAllSyncTargetsSynced() {
+    SYNC_METADATA_COLLECTIONS.forEach((collection) => {
+      const items = app.state[collection];
+      if (!Array.isArray(items)) return;
+      items.forEach((item) => {
+        if (item && item.syncStatus !== "conflict") item.syncStatus = "synced";
+        if (item?.item && item.item.syncStatus !== "conflict") item.item.syncStatus = "synced";
+      });
+    });
+  }
+
+  function markRestoredStatePending(state) {
+    const now = nowIso();
+    SYNC_METADATA_COLLECTIONS.forEach((collection) => {
+      const items = state[collection];
+      if (!Array.isArray(items)) return;
+      items.forEach((item) => markRestoredEntityPending(item, now));
+    });
+    state.updatedAt = now;
+  }
+
+  function markRestoredEntityPending(item, now) {
+    if (!item || typeof item !== "object") return;
+    item.updatedAt = item.updatedAt || now;
+    item.syncStatus = "pending";
+    item.deviceId = currentDeviceId() || item.deviceId || generateDeviceId();
+    item.version = normalizeEntityVersion(item.version) + 1;
+    if (item.item && typeof item.item === "object") markRestoredEntityPending(item.item, now);
+  }
+
+  function handleOnline() {
+    if (!app.state?.settings?.backupServerUrl) return;
+    showToast("オンラインに戻りました。PCバックアップは必要な時に設定から実行できます。");
+  }
+
   function addSettingsRow(type) {
     if (type === "department") {
       const target = document.getElementById("departmentRows");
@@ -4611,6 +5041,7 @@
     const now = nowIso();
     app.state.settings.showCompleted = data.get("showCompleted") === "on";
     app.state.settings.showLinkedMemos = true;
+    app.state.settings.backupServerUrl = normalizeBackupServerUrl(data.get("backupServerUrl"));
     delete app.state.settings["color" + "VisionMode"];
     delete app.state.settings.llmProvider;
     delete app.state.settings.llmEndpoint;
@@ -5616,14 +6047,13 @@
     );
     const selectedCount = [...current].filter((id) => memos.some((memo) => memo.id === id)).length;
     return `
-      <div class="memo-picker is-collapsed" data-memo-picker>
-        <button class="collapse-toggle memo-picker-toggle" type="button" data-action="toggle-task-memo-picker" aria-expanded="false">
-          <span class="collapse-mark">+</span>
+      <div class="memo-picker" data-memo-picker>
+        <div class="picker-heading memo-picker-heading">
           <span class="section-title">関連メモ</span>
           <span class="section-count" data-memo-picker-count>${formatMemoPickerCount(selectedCount)}</span>
-        </button>
+        </div>
         <p class="form-hint memo-picker-summary" data-memo-picker-summary>${formatMemoPickerSummary(selectedCount, memos.length)}</p>
-        <div class="memo-picker-body is-collapsed" data-memo-picker-body>
+        <div class="memo-picker-body" data-memo-picker-body>
           ${memos.length ? `
             <input id="taskMemoSearch" type="search" data-memo-search placeholder="メモを検索（漢字・かな・英字）" autocomplete="off">
             <div class="memo-picker-list" data-memo-picker-list>
@@ -5670,14 +6100,13 @@
     );
     const selectedCount = [...current].filter((id) => tasks.some((task) => task.id === id)).length;
     return `
-      <div id="memoTasks" class="task-picker is-collapsed" data-task-picker>
-        <button class="collapse-toggle task-picker-toggle" type="button" data-action="toggle-memo-task-picker" aria-expanded="false">
-          <span class="collapse-mark">+</span>
+      <div id="memoTasks" class="task-picker" data-task-picker>
+        <div class="picker-heading task-picker-heading">
           <span class="section-title">関連タスク</span>
           <span class="section-count" data-task-picker-count>${formatTaskPickerCount(selectedCount)}</span>
-        </button>
+        </div>
         <p class="form-hint task-picker-summary" data-task-picker-summary>${formatTaskPickerSummary(selectedCount, tasks.length)}</p>
-        <div class="task-picker-body is-collapsed" data-task-picker-body>
+        <div class="task-picker-body" data-task-picker-body>
           ${tasks.length ? `
             <input id="memoTaskSearch" type="search" data-task-search placeholder="タスク名で検索（漢字・かな・英字）" autocomplete="off">
             <div class="task-picker-list" data-task-picker-list>
@@ -5815,10 +6244,17 @@
     );
   }
 
-  function sortCalendarTasks(tasks) {
-    return sortTasksByActionDate(tasks).sort((a, b) =>
-      Number(Boolean(b.dueDate)) - Number(Boolean(a.dueDate))
+  function sortCalendarTasks(tasks, contextDate = "") {
+    return [...tasks].sort((a, b) =>
+      calendarTaskDisplayRank(a, contextDate) - calendarTaskDisplayRank(b, contextDate) ||
+      String(a.createdAt || "").localeCompare(String(b.createdAt || "")) ||
+      String(a.id || "").localeCompare(String(b.id || ""))
     );
+  }
+
+  function calendarTaskDisplayRank(task, contextDate = "") {
+    if (isDueDateDisplayContext(task, contextDate)) return 0;
+    return ({ P1: 1, P2: 2, P3: 3, SUB: 10 })[task.priority] || 20;
   }
 
   function normalizeMemoSort(value) {

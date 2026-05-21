@@ -3,3 +3,4 @@
 *.tmp
 _codex_backups/
 _codex_tmp/
+data/backups/
